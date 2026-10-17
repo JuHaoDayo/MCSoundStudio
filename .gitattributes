@@ -1,0 +1,23 @@
+# —— 行尾（卡 t_b96e4d46）：仓库里的文本一律「按 LF 存储 + 按 LF 检出」 ——
+#
+# 为什么必须写死这条：本机 Git 是全局 core.autocrlf=true（Windows 安装默认），而仓库此前没有
+# .gitattributes，于是 `git clone` 会在**检出**时把文本文件全改成 CRLF —— `sounds/vanilla/library.json`
+# 从 1,300,516 B（LF）变成 1,340,963 B（CRLF），scripts/verify-wiki-audit.js 里那条
+# `sha256(library.json) === baseline.libraryJsonSha256` 断言直接失败，干净克隆跑
+# `node scripts/run-core-regression.js` 就是「失败 1 项」（卡 t_7cf958b9 验收复现）。
+#
+# 事实依据：仓库里的文本 blob **没有一个含 CR**（全部 LF；这个计数会随仓库增长，就不写死数值了），
+# 所以加这条不改变任何已入库内容的字节 —— 它只保证「clone 出来的字节 = 库里的字节」。
+# `eol=lf` 必须显式写：只写 `text=auto` 的话，Windows 上仍按 core.eol=native 检出成 CRLF。
+* text=auto eol=lf
+
+# 二进制资产显式排除（不做行尾转换、也不做文本 diff）
+*.png    binary
+*.jpg    binary
+*.jpeg   binary
+*.ico    binary
+*.wav    binary
+*.ogg    binary
+*.mp3    binary
+*.exe    binary
+*.asar   binary

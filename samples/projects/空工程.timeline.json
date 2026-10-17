@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "name": "空工程",
+  "config": {
+    "gridMs": 50,
+    "gridMode": "ms",
+    "snapToGrid": true,
+    "totalMs": 3000,
+    "bpm": 0,
+    "beatsPerBar": 4
+  },
+  "tracks": [
+    {
+      "name": "main",
+      "label": "主轨",
+      "muted": false,
+      "solo": false,
+      "gain": 1
+    }
+  ],
+  "clips": [],
+  "visual": {
+    "kind": "none",
+    "path": null,
+    "dataUrl": null,
+    "animFile": "samples/robot-arm.animation.json",
+    "animName": "grab",
+    "naturalMs": 1000,
+    "manualMs": null
+  }
+}

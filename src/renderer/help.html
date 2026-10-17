@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<!--
+  MCSoundStudio 内置使用教程（卡 t_7ee2bf5b）。
+
+  为什么是一个独立 HTML 文件：
+    · 这是一个「可离线打开」的成品文档 —— 起始页点「打开使用教程」或编辑时按 F1 打开的窗口加载的就是它，
+      文件本身也可以直接双击用浏览器打开（或用编辑器 / 记事本看），不依赖程序、不依赖网络。
+    · 全部样式内联、零外部资源（没有 CDN 字体/图片/脚本），所以断网时排版完全一样。
+      改这个文件时请保持这条规矩 —— 一旦引用外链，离线打开就会缺样式。
+
+  怎么被打开的：src/main/main.js 的 openHelpWindow() 用 loadFile 加载本文件
+  （开发时是工程里的 src/renderer/help.html，打包后在 app.asar 里同样能读）。
+  「作者」按钮走 window.mcs.openExternal()（preload 暴露）→ 主进程 shell.openExternal，
+  用系统默认浏览器打开，绝对地址见下面的 AUTHOR_URL（与 main.js 里的常量保持一致）。
+
+  卡 t_c68d978a：补上「变速 / Alt 非破坏性裁剪 / 淡入淡出·效果预设 / 工程库」四类
+  已经上线但教程里没写的能力，并把「原版库 N 个事件」这类**会随库变动的写死数字**
+  改成不会过期的写法（约 1000+ 个，以实际加载为准）。
+  新能力的手势与边界都对着 src/renderer/timeline.js（几何真值）和 app.js（拖拽 /
+  属性面板入口）逐条核对过，改本文件时请同样核对，别凭印象写。
+
+  卡 t_706f52cd：5.1「范围 0.25x ~ 4x」那条以前引的是**属性面板改「时长」**路径的状态栏
+  原文，照 5.1 拖右缘时看不到它。现在改成分别引用两条路径真实会出现的句子
+  （拖边缘 =「已到 4x / 0.25x 倍速上限，再拖声音就铺不满这条了」；
+  面板改时长 = 多一句「声音会提前播完或在条尾被切断」）。
+  改这里的引文时，请对着 app.js 里真正拼字符串的那几行（拖动 status 与面板 change）取原文。
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>MCSoundStudio 使用教程</title>
+<style>
+  :root {
+    --bg: #14161a; --bg-2: #1b1e24; --bg-3: #22262e;
+    --fg: #e8eaf0; --fg-2: #b9c0cc; --fg-3: #8b93a1;
+    --border: #31363f; --accent: #4f9cf9; --accent-2: #f9a04f;
+    --ok: #3fbf72; --warn: #d29922;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 0 0 60px;
+    background: var(--bg); color: var(--fg-2);
+    font: 14px/1.8 "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+  }
+  header {
+    position: sticky; top: 0; z-index: 5;
+    display: flex; align-items: center; gap: 12px;
+    padding: 14px 28px; background: var(--bg-2);
+    border-bottom: 1px solid var(--border);
+  }
+  header h1 { margin: 0; font-size: 17px; color: var(--fg); flex: 1; }
+  header .ver { font-size: 12px; color: var(--fg-3); font-weight: 400; margin-left: 8px; }
+  main { max-width: 900px; margin: 0 auto; padding: 0 28px; }
+  h2 {
+    margin: 34px 0 10px; padding-bottom: 7px; font-size: 16px; color: var(--fg);
+    border-bottom: 1px solid var(--border);
+  }
+  h2 .no {
+    display: inline-block; min-width: 22px; margin-right: 8px; padding: 0 6px;
+    background: var(--accent); color: #0c0f14; border-radius: 4px;
+    font-size: 13px; text-align: center;
+  }
+  h3 { margin: 20px 0 6px; font-size: 14px; color: var(--fg); }
+  p { margin: 9px 0; }
+  ul, ol { margin: 8px 0; padding-left: 22px; }
+  li { margin: 4px 0; }
+  code, kbd {
+    font-family: Consolas, "Courier New", monospace; font-size: 12.5px;
+    background: var(--bg-3); border: 1px solid var(--border);
+    border-radius: 3px; padding: 1px 5px; color: var(--fg);
+  }
+  kbd { border-bottom-width: 2px; white-space: nowrap; }
+  a { color: var(--accent); }
+  table { border-collapse: collapse; width: 100%; margin: 10px 0; font-size: 13px; }
+  th, td { border: 1px solid var(--border); padding: 6px 10px; text-align: left; vertical-align: top; }
+  th { background: var(--bg-2); color: var(--fg); font-weight: 600; }
+  td:first-child { white-space: nowrap; }
+  .toc {
+    margin: 20px 0 0; padding: 14px 20px;
+    background: var(--bg-2); border: 1px solid var(--border); border-radius: 6px;
+  }
+  .toc b { color: var(--fg); }
+  .toc a { display: inline-block; margin: 2px 14px 2px 0; }
+  .note {
+    margin: 12px 0; padding: 10px 14px; border-radius: 4px;
+    border-left: 3px solid var(--accent); background: rgba(79, 156, 249, .10);
+  }
+  .warn {
+    margin: 12px 0; padding: 10px 14px; border-radius: 4px;
+    border-left: 3px solid var(--warn); background: rgba(210, 153, 34, .12);
+  }
+  .warn b { color: var(--warn); }
+  .tip { color: var(--fg-3); font-size: 12.5px; }
+  button {
+    font: inherit; cursor: pointer; color: var(--fg);
+    background: var(--bg-3); border: 1px solid var(--border);
+    border-radius: 5px; padding: 7px 14px;
+  }
+  button:hover { border-color: var(--accent); color: #fff; }
+  button.author {
+    background: var(--accent); border-color: var(--accent);
+    color: #0c0f14; font-weight: 600;
+  }
+  button.author:hover { background: #6cb0ff; }
+  #authorResult { font-size: 12.5px; color: var(--ok); margin-left: 10px; }
+  footer {
+    max-width: 900px; margin: 44px auto 0; padding: 18px 28px 0;
+    border-top: 1px solid var(--border); color: var(--fg-3); font-size: 12.5px;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>MCSoundStudio 使用教程<span class="ver" id="helpVersion">v0.1</span></h1>
+  <button class="author" id="btnAuthorTop">作者 · B 站主页</button>
+  <span id="authorResult"></span>
+</header>
+
+<main>
+
+  <div class="toc">
+    <b>目录</b>（本页是完整离线文档，<kbd>Ctrl</kbd>+<kbd>F</kbd> 也能搜）<br>
+    <a href="#get-started">上手三步</a>
+    <a href="#project">1 工程</a>
+    <a href="#overview">↳ 起始页的工程库</a>
+    <a href="#import">2 导入素材</a>
+    <a href="#timeline">3 时间轴</a>
+    <a href="#editing">4 音效编辑</a>
+    <a href="#clipfx">5 变速 / 裁剪 / 淡入淡出</a>
+    <a href="#export">6 导出</a>
+    <a href="#shortcuts">7 快捷键与鼠标操作</a>
+    <a href="#faq">8 常见问题</a>
+    <a href="#author">9 关于作者</a>
+  </div>
+
+  <p class="tip" style="margin-top:14px">
+    本页不需要联网、不加载任何外部资源：断网时排版和现在完全一样，打包成 exe 之后也照常打开。
+  </p>
+
+  <h2 id="get-started">上手三步</h2>
+  <ol>
+    <li>启动后先在<b>起始页</b>点「＋ 新建工程」，或点「打开工程文件…」继续编辑已有的 <code>timeline.json</code>。</li>
+    <li>需要对画面配音时，点顶部「导入模型」或「导入GIF/视频」；导入后会进入「① 模型/GIF 调整」，先摆好角度、选动画或放好画面。</li>
+    <li>点「② 音效」回到时间轴：左侧点「原版库」，把需要的音效<b>拖到轨道</b>上，按<kbd>空格</kbd>整段试听。</li>
+  </ol>
+  <p>做完了在右侧「导出」页点「导出全部 ▾」，一次拿到策划案、ModSDK 代码和 json。</p>
+
+  <h2 id="project"><span class="no">1</span>工程：起始页 / 新建 / 打开 / 保存</h2>
+  <p><b>起始页</b>是启动后的第一屏：这里列出已有工程，并提供「＋ 新建工程」「打开工程文件…」「打开使用教程」和「作者 · B 站主页」。进入工作页后，左上角「← 工程」可以回到起始页。</p>
+  <table>
+    <tr><th>顶部按钮</th><th>做什么</th></tr>
+    <tr><td>新建</td><td>清空当前时序，回到空白时间轴（有未保存改动会先问你）。</td></tr>
+    <tr><td>打开</td><td>打开一个 <code>timeline.json</code> 工程源文件，轨道、片段、参数、视觉素材都恢复。</td></tr>
+    <tr><td>保存</td><td>存成 <code>timeline.json</code>（工程源文件），下次可以接着改。<kbd>Ctrl</kbd>+<kbd>S</kbd> 同效，第一次会让你选保存位置；<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd> = 另存为。</td></tr>
+    <tr><td>← 工程</td><td>回到起始页。当前工程有未保存改动时，会先让你选保存、放弃或取消。</td></tr>
+  </table>
+  <p><b>「保存」和「导出」是两件事</b>：保存只存工程源文件（给自己下次改），导出才是交给策划 / 程序 / 资源包的交付物。两个都要做。</p>
+  <h3>顶栏的时间参数</h3>
+  <table>
+    <tr><td>总长(ms)</td><td>这段时序的长度，也是导出时用的时间基准。<b>以你在游戏里看到的真实动画时长为准</b>，别直接用 GIF 的时长。</td></tr>
+    <tr><td>网格</td><td>吸附精度，默认 <code>50ms</code> = 1 tick。基岩版跑在 20 TPS 上，<b>导出时所有时间点都会吸附到 50ms 网格</b>：放在 137ms 的片段导出会落到 150ms，校验页会明确告诉你。</td></tr>
+    <tr><td>吸附</td><td>关掉后拖动不再吸附网格，可以做自由摆放（导出时仍会按 50ms 折算）。</td></tr>
+    <tr><td>BPM / 拍线</td><td>BPM 填非 0 并勾「拍线」，标尺上出现虚线拍线和小节线，适合做节奏型编排；策划案里会自动写「第 N 小节第 M 拍」的落点。</td></tr>
+  </table>
+  <div class="note">关窗时如果还有没保存的改动，程序会拦一下并给你三个选择：取消 / 不保存直接退出 / 返回保存。</div>
+
+  <h3 id="overview">起始页的工程库（导入别人的工程）</h3>
+  <p>起始页的「我的工程」是<b>已保存工程的浏览器</b>，也是「把之前做过的（或别人给的）工程拿进来接着改」的入口。这里有以下按钮：</p>
+  <table>
+    <tr><th>按钮</th><th>做什么</th></tr>
+    <tr><td>打开工程文件…</td><td>从磁盘挑一份 <code>.timeline.json</code> 打开（和顶栏「打开」同一件事）。</td></tr>
+    <tr><td>打开工程库文件夹</td><td>用文件管理器打开工程库目录（想手动备份 / 清理 / 拷给别人时用）。</td></tr>
+    <tr><td>刷新</td><td>重新扫一遍工程库。</td></tr>
+  </table>
+  <p>每张卡片上写着工程名、<b>按真实片段画出来的缩略条</b>（不是占位图）、总长、片段数、用了几条轨道、BPM、视觉参考（GIF / 视频 / 图片 / 动画 / 模型）、文件名、大小和修改时间；右上角标着它来自「工程库」还是「最近打开过」。</p>
+  <ul>
+    <li><b>点卡片 = 导入这个工程</b>：轨道、片段、参数全部恢复；工程里记着<b>模型</b>的话会把那个 <code>.bbmodel</code> 重新读一遍画回预览画布（模型文件已经不在了，会在「校验」页写明读不到，其余内容不受影响）。</li>
+    <li><b>点卡片会直接替换编辑器里的内容</b>（这就是「打开工程」的语义，而且换工程会清空撤销历史，撤不回来）。所以当前工程有没保存的改动，先存一下再点。</li>
+    <li><b>文件已经不在磁盘上</b>的（被删 / 被移走）：卡片<b>灰显</b>，并且直接写出找不到的路径和原因 —— 不会无声消失。</li>
+    <li>工程库里混进了<b>不是工程的文件</b>（JSON 坏了 / 是别的格式）：面板会点名是哪个文件、展开写明每个的具体原因，它们只是被跳过，其它工程照常可用。</li>
+  </ul>
+
+  <h2 id="import"><span class="no">2</span>导入：视觉素材与音效库</h2>
+  <h3>先到「① 模型/GIF 调整」摆画面</h3>
+  <p>导入模型、动画、GIF、视频或图片后，程序会自动切到「① 模型/GIF 调整」。这里的「素材槽」分成模型和画面参考两格：模型用「导入模型 / 移除模型」，画面参考用「导入」和「移除」。已经有画面时，「导入」会显示为「替换」。两种素材可同时保留；同时存在时用「看模型」和「看画面」切换预览。</p>
+  <p>要换素材或清空素材时，直接点对应的「移除模型」或「移除」。这只移除当前一种素材，不会误删另一种；移除后可按 <kbd>Ctrl</kbd>+<kbd>Z</kbd> 恢复。</p>
+  <h3>动画：关键帧与 Molang 两档</h3>
+  <p>在调整页的「动画」区点「导入动画」，或从模型自带动画中选择。点击「关键帧动画」可选择由数值关键帧组成、能在预览画布完整播放的动画；点击「Molang 语言动画」可查看含表达式的动画。本版本不会求值 Molang 表达式，预览会保持前一帧，并会在界面中提示这个限制。选中动画、角度和素材在切回「② 音效」及保存后重开时都会沿用。</p>
+  <h3>视觉参考（GIF / 视频 / 图片）</h3>
+  <p>在调整页点画面参考的「导入 / 替换」、点顶部「导入GIF/视频」，或直接把文件拖进预览区。GIF 会被<b>逐帧真解码</b>，位置完全由播放头决定 —— 和视频一样可控（暂停即定格、往回拖也倒退）。</p>
+  <div class="warn"><b>大 GIF 拖动会发钝：先把 GIF 转成 MP4 再导入。</b><br>
+    大 GIF 要逐帧解码，帧数和像素尺寸越大，拖动越可能发钝；这不是卡死，是逐帧解码的代价。转成 MP4 后画面走视频解码，拖动更跟手、也更省内存：<br>
+    <code>ffmpeg -i in.gif -pix_fmt yuv420p out.mp4</code></div>
+  <p class="tip">GIF 只是视觉参考，不是时间基准：GIF 的帧延迟以 10ms 为单位存储，各家导出工具写法不一，实际时长常和游戏里对不上 —— 请手动填顶栏「总长(ms)」。</p>
+
+  <h3>模型与动画</h3>
+  <table>
+    <tr><td>导入模型</td><td>读 <code>.bbmodel</code>（Blockbench），弹出报告：模型名、格式版本、尺寸、元素/组数量、包围盒、全部骨骼名、<b>贴图完整性检查</b>、模型自带动画列表。</td></tr>
+    <tr><td>导入动画</td><td>读 <code>.animation.json</code>，弹出报告：每条动画的时长（ms / 秒 / tick）、循环模式、骨骼列表、关键帧时间点、插值模式；还会做<b>脏数据检测</b>和<b>骨骼交叉校对</b>（动画骨骼 vs 模型 group，谁多谁少一目了然）。<br>导入后<b>最长的动画会自动设为时间轴总长</b>，时间轴就和动画对齐了。</td></tr>
+  </table>
+
+  <h3>音效库（左栏）</h3>
+  <table>
+    <tr><td>原版库</td><td>加载内置的基岩版原版音效索引（约 1000+ 个事件，含随机变体；<b>具体数量以这次实际加载为准</b> —— 状态栏会写「已加载原版音效库：N 个事件 / M 个变体」）。名称、中文分类、事件 ID 都内置，<b>不依赖音频文件</b>。</td></tr>
+    <tr><td>扫描…</td><td>扫描你自己的音效文件夹（递归，支持 <code>.ogg .wav .mp3 .fsb .flac .m4a</code>）。</td></tr>
+    <tr><td>+文件</td><td>直接挑几个音频文件加进库。</td></tr>
+    <tr><td>搜索框</td><td>中文名和事件名都能搜，例如「铁傀儡」「dig.stone」。</td></tr>
+    <tr><td>☆</td><td>收藏；收藏项置顶在「★ 收藏」分组。</td></tr>
+    <tr><td>▶</td><td>试听（同一时刻只播一个）。</td></tr>
+  </table>
+  <div class="note">试听没声音时看状态栏右侧的提示：如果写「试听音频未就位」，点状态栏会弹出引导，
+    告诉你在什么位置放 <code>audio</code> 文件夹。名称 / 分类 / 事件 ID 和拖拽、导出都不受影响，只有试听需要音频文件。</div>
+
+  <h2 id="timeline"><span class="no">3</span>时间轴：轨道、播放头、网格</h2>
+  <h3>轨道（分层）</h3>
+  <ul>
+    <li>默认一条「主轨」，点轨道区左上角的 <b>+ 轨道</b>新建。<b>双击轨道名</b>重命名。</li>
+    <li>推荐分层：<b>机械层</b>（机器运转）+ <b>音效层</b>（打击/开关）+ <b>环境层</b>（循环底噪）。</li>
+    <li>轨道按钮：<b>M</b> 静音整轨、<b>S</b> 只留这一轨（其它轨压暗）、<b>✕</b> 删轨道（连带删掉轨上的片段）。只剩一条轨道时删除按钮是灰的 —— 至少要留一条。</li>
+    <li>点一下轨道选中它（高亮），新拖进来的音效就落在这条轨上。</li>
+  </ul>
+  <h3>播放头与视图</h3>
+  <ul>
+    <li><b>拖标尺</b>移动播放头：音频和 GIF 一起同步到该时间点；播放中拖标尺画面跟着鼠标走（音频暂停，松手从新位置接着播）。</li>
+    <li>底部「缩放」滑块、<kbd>+</kbd> / <kbd>-</kbd> 缩放；<b>适合窗口</b>（或 <kbd>F</kbd>）把整段刚好铺满窗口；<kbd>Alt</kbd>+滚轮以鼠标位置为锚点缩放。</li>
+    <li>播放头越过 GIF 末尾时画面定格在最后一帧，预览区会写「已放完，停在最后一帧」；再点播放会从 0ms / 首帧重新来。</li>
+  </ul>
+  <h3>片段的鼠标操作</h3>
+  <table>
+    <tr><td>拖片段</td><td>移动位置（按网格吸附）。</td></tr>
+    <tr><td>拖片段右缘</td><td>改长度，<b>播放倍速等比跟着变</b>（详见第 5 节）。</td></tr>
+    <tr><td><kbd>Alt</kbd>+拖片段右缘</td><td><b>非破坏性裁剪尾部</b>（倍速不变，素材不丢，拖回来就恢复，详见第 5 节）。</td></tr>
+    <tr><td><kbd>Alt</kbd>+拖片段<b>左端 8px</b></td><td><b>非破坏性裁剪头部</b>（要先按住 Alt 再按下鼠标，详见第 5 节）。</td></tr>
+    <tr><td>空白处拖动</td><td><b>框选</b>：拉出蓝色选择框，松手后框内片段全部选中（播放头不动）。</td></tr>
+    <tr><td><kbd>Ctrl</kbd>+点击</td><td>把片段加入 / 移出选中集（可连续点多块）。</td></tr>
+    <tr><td><kbd>Shift</kbd>+点击</td><td>从主选中到该片段之间整段加选。</td></tr>
+    <tr><td>拖选中的片段</td><td>整体移动所有选中片段，相对间距不变（吸附以主选中为准）。</td></tr>
+    <tr><td>右键片段</td><td>属性 / 复制 / 粘贴到播放头 / 再复制一份 / <b>按播放头拆分</b> / <b>对齐到网格</b> / 移到上·下一条轨道 / <b>锁定·解锁</b> / 全选 / 删除。多选状态下菜单作用于全部选中片段。</td></tr>
+    <tr><td>右键轨道空白</td><td>粘贴到播放头 / 撤销删除 / 全选 / 取消选中。</td></tr>
+  </table>
+  <p><b>锁定干什么用：</b>锁住的片段不会被拖动、改长度、方向键移动、拆分、对齐、换轨、<b>裁剪</b>（导出 / 复制 / 删除不受影响）。配音时用它当「挡板」，防止手一抖把已经对齐好的位置拖歪。锁定的片段在时间轴上带「锁定」角标。</p>
+
+  <h2 id="editing"><span class="no">4</span>音效编辑：属性面板</h2>
+  <p>选中一个片段，右侧「属性」页出现它的参数：</p>
+  <table>
+    <tr><th>字段</th><th>说明</th></tr>
+    <tr><td>标签</td><td>时间轴上显示的名字，方便自己认（会写进策划案）。</td></tr>
+    <tr><td>音效事件名</td><td><code>sound_definitions.json</code> 里的 key，例如 <code>mob.zombie.say</code>。导出时用的就是它。</td></tr>
+    <tr><td>起始 (ms) / 时长 (ms)</td><td>片段在时间轴上的位置和长度。<b>改时长 = 等比改播放倍速</b>（和拖右缘完全同一套算术，见第 5 节）。</td></tr>
+    <tr><td>裁剪起点 / 裁剪终点 (源内 ms)</td><td>用到素材内部的那一段，<b>非破坏性</b>（见第 5 节）。「裁剪终点」输入框右边写着「源音频 Nms」—— 把终点填回这个数就恢复完整素材。</td></tr>
+    <tr><td>效果预设</td><td>淡入 / 淡出的「一档」套用：无（硬切）/ 淡入 / 淡出 / 淡入 + 淡出 / 软起软落（长淡）/ 极短淡（去爆音）；手改下面两个框后会回显成「自定义」。见第 5 节。</td></tr>
+    <tr><td>淡入 (ms) / 淡出 (ms)</td><td>两头斜坡的毫秒数，播放和试听都会真的做斜坡（片段条上也会画出半透明斜坡）。两者之和不会超过片段长度。</td></tr>
+    <tr><td>（字段下方那行小字）</td><td>「素材保留 Xms · 片段长度 Yms · 播放倍速 Zx · 实际会响 Wms」—— 一眼看清这个片段到底会响多久、用掉素材多少。</td></tr>
+    <tr><td>音量</td><td>0 ~ 1（中国版接口限制；超过 1 会叠加音源，可能爆音）。</td></tr>
+    <tr><td>音高</td><td>1.00 = 原速；数值越大音调越高、播得越快。<b>听感安全区 0.5 ~ 2.0</b> —— 在这个区间里微调就能让同一素材听出差别，超出会有明显变声，校验页也会警告。滑块给常用范围，要精确值用「音高精确值」框（0~256）。</td></tr>
+    <tr><td>轨道 / 变体</td><td>换轨；变体见下。</td></tr>
+    <tr><td>备注</td><td>会写进策划案，用来交代「这一声为什么放这里」。</td></tr>
+    <tr><td>▶ 试听这个音效</td><td>只响这一段，不会整段播放（<kbd>Enter</kbd> 同效）。</td></tr>
+    <tr><td>复制 / 删除</td><td>复制到剪贴板 / 删掉这个片段（删错了 <kbd>Ctrl</kbd>+<kbd>Z</kbd> 撤销）。</td></tr>
+  </table>
+  <h3>变体（随机版本）</h3>
+  <p>原版音效通常有多个随机版本（如石头挖掘有 4 个）。<b>「自动随机」</b>表示每次播放随机取一个，导出时保留事件 ID 交给游戏随机；<b>「锁定变体」</b>则固定用某一个文件试听参考。时间轴上悬停 <span style="color:var(--accent-2)">×N</span> 角标可以展开变体列表逐个试听。</p>
+  <h3>多选</h3>
+  <p>选中 2 个以上片段时，属性页显示整组摘要（个数、时间范围），可以整组复制到剪贴板或整组删除。删错了按 <kbd>Ctrl</kbd>+<kbd>Z</kbd> 撤销 —— 撤销 / 重做是<b>通用</b>的：删除、移动、改长度（变速）、裁剪、淡入淡出、改参数、改总长……各算一步，<kbd>Ctrl</kbd>+<kbd>Y</kbd> 重做。</p>
+  <h3>校验页</h3>
+  <p>「校验」页签会实时列出问题（随时间点是否会落到网格、音量/音高是否超出安全区、事件名是否可用、裁剪起止是否合法、淡入淡出是否超过条长等），角标上的数字就是问题条数。点「重新校验」手动再跑一遍。</p>
+
+  <h2 id="clipfx"><span class="no">5</span>变速 / 裁剪 / 淡入淡出（片段与素材的关系）</h2>
+  <p>这一节讲的是<b>片段条和它背后那段音频素材的关系</b>：这条多长、从素材的第几毫秒开始播、播到哪、两头要不要淡。三件事都能在时间轴上直接拖，也能在属性面板里填精确值。</p>
+
+  <h3>5.1 变速：拖片段右缘 = 改长度 = 等比改倍速</h3>
+  <table>
+    <tr><th>手势</th><th>结果</th></tr>
+    <tr><td>拖片段<b>右缘</b>（不按 Alt）</td><td>条变长 / 变短，播放倍速<b>按反比跟着变</b>：条拉成 2 倍长 → 0.5x（更慢更低），条压成一半 → 2x（更快更高）。守的等式是「<b>条长 × 倍速 = 素材长度</b>」，所以声音永远正好铺满这一条。</td></tr>
+    <tr><td>属性面板「时长 (ms)」</td><td>和拖右缘完全同一套算术 —— 从面板改和用鼠标拖，结果一致。</td></tr>
+    <tr><td>属性面板「音高」</td><td>直接给倍速值（滑块 0.25 ~ 4；精确框 0 ~ 256）。这里的 1.00 = 原速。</td></tr>
+  </table>
+  <ul>
+    <li><b>范围 0.25x ~ 4x</b>：超出会被钳住，状态栏会写明钳在哪一头 —— 拖片段边缘时是「已到 4x 倍速上限，再拖声音就铺不满这条了」/「已到 0.25x 倍速上限，再拖声音就铺不满这条了」；在属性面板改「时长」时还会多一句「声音会提前播完或在条尾被切断」。钳住时「条长 × 倍速 = 素材长度」不再成立，听到的就是这个后果，不是丢了数据。</li>
+    <li><b>最短条长 30ms</b>：再往里压就压不动了。</li>
+    <li>这是<b>磁带式变速</b>：速度和音高一起变（这是引擎 pitch 参数的语义，不是本工具的限制）。真要「变速不变调」，得先用音频软件把素材处理好再导入。</li>
+  </ul>
+
+  <h3>5.2 非破坏性裁剪：<kbd>Alt</kbd> + 边缘（素材一个字节都不会丢）</h3>
+  <table>
+    <tr><td><kbd>Alt</kbd> + 拖<b>右缘</b></td><td>裁掉<b>尾部</b>：条变短、播放倍速不变，只是把「源内出点」往里推。<b>往右拖回去</b>就把裁掉的部分还原（最远到源音频的自然结尾）。</td></tr>
+    <tr><td><kbd>Alt</kbd> + 拖片段<b>左端 8px</b>这一带</td><td>裁掉<b>头部</b>：条尾不动，片段起点和「源内入点」一起往右走。<b>往左拖回去</b>就还原（最远到源音频开头、片段起点回到 0ms）。</td></tr>
+    <tr><td>属性面板「裁剪起点 / 裁剪终点 (源内 ms)」</td><td>上面两件事的精确写法。改<b>裁剪起点</b>时片段起点跟着挪、末尾不动；<b>裁剪终点</b>填回「源音频 Nms」就恢复完整素材。</td></tr>
+  </table>
+  <div class="note"><b>裁剪不会删除素材。</b>它只改「源内起 → 止」这两个数，磁盘上的音频文件一个字节都没动 ——
+    所以边缘拖回去就能恢复，导出也能把这段起止如实写进策划案。<br>
+    时间轴上被裁过的片段带一枚 <b>裁剪</b> 角标（鼠标停上去能看到「源内 Xms → Yms（素材没丢，拖边缘可恢复）」）；
+    有淡入淡出的片段会在波形上画出<b>半透明斜坡</b>，并带「淡入 30/0ms」这样的角标。</div>
+  <div class="warn"><b>「Alt + 边缘」的三个前提：</b>① 要<b>先按住 Alt 再按下鼠标</b>（按下那一刻决定这次是裁剪还是移动，中途才按没用）；
+    ② 「裁头」<b>没有单独的把手</b>，只在片段<b>最左边 8px</b> 这一带生效 —— 鼠标停在那条窄带上才会看到提示文字；
+    ③ 片段被<b>锁定</b>时不能裁剪（右键「解锁」后再来）。<br>
+    顺带记住这个对照表：<b>不按 Alt</b> 拖左端 = 移动片段，<b>按 Alt</b> 拖左端 8px = 裁头；<b>不按 Alt</b> 拖右缘 = 改长度（等比变速），<b>按 Alt</b> 拖右缘 = 裁尾。</div>
+
+  <h3>5.3 淡入 / 淡出 / 效果预设</h3>
+  <p>选中片段 → 右侧「属性」页 →「效果预设」下拉框，一档套用：</p>
+  <table>
+    <tr><th>预设</th><th>发生什么</th></tr>
+    <tr><td>无（硬切）</td><td>淡入淡出都归 0，原样进出。</td></tr>
+    <tr><td>淡入 / 淡出 / 淡入 + 淡出</td><td>按条长的 <b>15%</b> 算斜坡 —— 同一个预设套在 200ms 和 2s 的片段上都合适。</td></tr>
+    <tr><td>软起软落（长淡）</td><td>两头各 <b>30%</b>，给底噪、风、循环音铺得更柔。</td></tr>
+    <tr><td>极短淡（去爆音）</td><td>固定 淡入 <b>10ms</b> / 淡出 <b>20ms</b>，专门消掉硬切那一下「啪」。</td></tr>
+    <tr><td>自定义（手改淡入 / 淡出）</td><td>不用预设，直接在下面两个框里填毫秒数；改完下拉框会回显成「自定义」或刚好匹配上的那一档。</td></tr>
+  </table>
+  <ul>
+    <li>淡入 + 淡出<b>不能超过片段长度</b>：超了程序会自动把值收短，并在状态栏说明「两者之和不能超过片段长度 Nms，已自动收短」（否则两段斜坡会互相吃掉）。</li>
+    <li>播放 / 试听都会按这两个值真的做斜坡，片段条上的斜坡也是照它画的 —— 不用靠猜。</li>
+  </ul>
+
+  <h3>5.4 撤销与导出怎么对待这些改动</h3>
+  <ul>
+    <li><b>一次拖动 = 一步撤销</b>：拖长度、裁剪、移动，拖的过程中随便怎么动，松手后按一次 <kbd>Ctrl</kbd>+<kbd>Z</kbd> 就整段回到拖动之前（状态栏会说清撤的是哪一类：改片段长度 / 非破坏性裁剪 / 移动片段…，<kbd>Ctrl</kbd>+<kbd>Y</kbd> 可以重做）。属性面板里改数值，也是各算一步。</li>
+    <li><b>导出会写源内起止</b>：策划案 .md 里会单开一节「裁剪起止与效果（非破坏性）」，逐条写「源内起 → 止、素材保留多少、条长、播放倍速、淡入 / 淡出」；sound_sequence.py 每一行末尾的注释里也写着。中国版 ModSDK 的播放接口没有裁剪 / 淡入淡出这些参数，所以程序会在注释里提醒「先在音频软件里把素材处理好」—— 它不会假装引擎支持。</li>
+  </ul>
+
+  <h2 id="export"><span class="no">6</span>导出：一次拿到 5 个文件</h2>
+  <p>先在「导出」页填好<b>时序名称</b>、<b>ModSDK 命名空间</b>（默认 <code>mymod</code>）、<b>函数名</b>（默认 <code>playMachineSequence</code>）和<b>自定义音效目录</b>，然后点顶部「导出全部 ▾」：</p>
+  <table>
+    <tr><th>文件</th><th>用途</th></tr>
+    <tr><td>策划案 .md</td><td>直接贴进策划文档的时间表（含每条音效的时间、事件、参数、备注和节拍落点；做过裁剪 / 变速 / 淡入淡出的会另开一节写清源内起止）。</td></tr>
+    <tr><td>sound_sequence.py</td><td>中国版 ModSDK 可直接调用的播放器代码（裁剪 / 淡入淡出的信息写在每行注释里，因为接口本身没有这些参数）。</td></tr>
+    <tr><td>sound_definitions.json</td><td>自定义音效注册。<b>全用原版事件时这个文件会是空的并附说明</b>（原版事件不需要注册）。</td></tr>
+    <tr><td>sound_effects.json</td><td>可贴进 Blockbench 动画的音效片段。</td></tr>
+    <tr><td>timeline.json</td><td>工程源文件，下次「打开」可以继续改。</td></tr>
+  </table>
+  <p>「导出」页里也可以只导出其中一种：<b>预览导出内容</b> 会先在弹窗里给你看一遍再决定要不要落盘。</p>
+
+  <h2 id="shortcuts"><span class="no">7</span>快捷键与鼠标操作</h2>
+  <h3>通用</h3>
+  <table>
+    <tr><td><kbd>空格</kbd></td><td>播放 / 暂停（GIF 与视频同步定格在当前帧）</td></tr>
+    <tr><td><kbd>Esc</kbd></td><td>先关弹窗；没有弹窗时取消选中</td></tr>
+    <tr><td><kbd>F1</kbd></td><td>打开这份离线使用教程</td></tr>
+    <tr><td><kbd>Ctrl</kbd>+<kbd>S</kbd></td><td>保存工程源文件 timeline.json</td></tr>
+    <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd></td><td>另存为（强制弹位置选择）</td></tr>
+    <tr><td><kbd>F</kbd></td><td>缩放到整段刚好铺满窗口</td></tr>
+    <tr><td><kbd>+</kbd> / <kbd>-</kbd></td><td>放大 / 缩小时基</td></tr>
+    <tr><td><kbd>Alt</kbd>+滚轮</td><td>以鼠标位置为锚点缩放</td></tr>
+  </table>
+  <h3>播放头与片段</h3>
+  <table>
+    <tr><td><kbd>←</kbd> <kbd>→</kbd></td><td>移动播放头一格；<b>选中片段时改为移动片段</b>（步长 = 当前网格，默认 50ms）</td></tr>
+    <tr><td><kbd>Alt</kbd>+<kbd>←</kbd> <kbd>→</kbd></td><td>微调 10ms（脱离网格，用于精细对齐）</td></tr>
+    <tr><td><kbd>Shift</kbd>+<kbd>←</kbd> <kbd>→</kbd></td><td>移动 1ms（最精细）</td></tr>
+    <tr><td><kbd>Home</kbd> / <kbd>End</kbd></td><td>跳到开头 / 结尾</td></tr>
+    <tr><td><kbd>Ctrl</kbd>+<kbd>↑</kbd> <kbd>↓</kbd></td><td>把选中片段移到上 / 下一条轨道</td></tr>
+    <tr><td><kbd>Enter</kbd></td><td>试听选中片段</td></tr>
+    <tr><td><kbd>D</kbd></td><td>复制选中片段，副本<b>紧跟其后</b>（不经过剪贴板）</td></tr>
+    <tr><td><kbd>M</kbd> / <kbd>S</kbd></td><td>静音 / 独奏该片段所在轨道</td></tr>
+  </table>
+  <h3>选中集与编辑</h3>
+  <table>
+    <tr><td><kbd>Ctrl</kbd>+<kbd>C</kbd></td><td>复制选中的片段（可多个）</td></tr>
+    <tr><td><kbd>Ctrl</kbd>+<kbd>V</kbd></td><td>粘贴到<b>播放头</b>位置，片段之间的相对间距保持不变</td></tr>
+    <tr><td><kbd>Ctrl</kbd>+<kbd>A</kbd></td><td>全选时间轴上的所有片段</td></tr>
+    <tr><td><kbd>Delete</kbd> / <kbd>Backspace</kbd></td><td>删除选中的<b>全部</b>片段（多选时一起删）</td></tr>
+    <tr><td><kbd>Ctrl</kbd>+<kbd>Z</kbd></td><td><b>撤销</b>上一步改动：删除 / 移动 / 改长度 / 裁剪 / 淡入淡出 / 改参数 / 改总长……各算一步，<b>一次拖动只算一步</b></td></tr>
+    <tr><td><kbd>Ctrl</kbd>+<kbd>Y</kbd></td><td><b>重做</b>刚撤销的那一步（<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> 同效）</td></tr>
+  </table>
+  <h3>鼠标</h3>
+  <table>
+    <tr><td>拖标尺</td><td>移动播放头（GIF 跟着前后走）</td></tr>
+    <tr><td>拖片段右缘</td><td>改长度 = <b>等比改播放倍速</b>（磁带式变速，见第 5 节）</td></tr>
+    <tr><td><kbd>Alt</kbd>+拖右缘</td><td><b>非破坏性裁剪尾部</b>（倍速不变，拖回去可恢复）</td></tr>
+    <tr><td><kbd>Alt</kbd>+拖片段左端 8px</td><td><b>非破坏性裁剪头部</b>（先按住 Alt 再按下鼠标）</td></tr>
+    <tr><td>空白处拖动</td><td>框选；<kbd>Ctrl</kbd>+点击加选、<kbd>Shift</kbd>+点击整段加选</td></tr>
+    <tr><td>拖动预览区下缘</td><td>调整预览区高度（双击复位）</td></tr>
+    <tr><td>点轨道 / 双击轨道名</td><td>选中轨道 / 重命名</td></tr>
+  </table>
+  <div class="note">快捷键在文本框、搜索框里会让位给打字（<kbd>空格</kbd> 在搜索框里是空格，在数字框里照样播放 / 暂停）；
+    <kbd>F1</kbd>、<kbd>Ctrl</kbd>+<kbd>S</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd> 不分焦点、永远生效。</div>
+
+  <h2 id="faq"><span class="no">8</span>常见问题</h2>
+  <table>
+    <tr><td><b>拖进去没声音</b></td><td>先看片段上有没有波形：有波形说明文件在。再查轨道是否被 <b>M</b> 静音、或别的轨按了 <b>S</b> 独奏（其它轨会被压暗）。</td></tr>
+    <tr><td><b>原版事件没声音</b></td><td>试听文件来自公开 OGG 镜像，个别较新的事件可能没有对应文件；属性面板会写「找不到对应音频文件」，此时仍可正常导出事件 ID。</td></tr>
+    <tr><td><b>状态栏说「试听音频未就位」</b></td><td>点状态栏会有引导：把音频放进它给的目录（子文件夹结构保持原样，程序会递归查找），重启即可。名称、分类、拖拽、导出都不受影响。</td></tr>
+    <tr><td><b>按空格没反应</b></td><td>光标在文本框 / 搜索框里时空格是打字，快捷键会让位；数字框（总长、BPM）里空格照样能播放 / 暂停。点一下时间轴空白处最保险。</td></tr>
+    <tr><td><b>GIF 不动</b></td><td>GIF 由播放头驱动，不自己播（暂停时定格是正常的）。按空格或拖标尺它就会跟着走；时间轴还是空的也能按播放，只放画面。</td></tr>
+    <tr><td><b>大 GIF 拖动钝 / 卡</b></td><td>逐帧解码的代价（没丢事件、没错帧，就是手感钝），不是卡死。办法：<b>先把 GIF 转成 MP4 再导入</b>。</td></tr>
+    <tr><td><b>拖右缘后声音变快 / 变尖了</b></td><td>不是 bug：拖右缘 = 等比改播放倍速（磁带式，速度和音高一起变），目的是让声音正好铺满这一条。属性面板的「时长」是同一套算术，改它也会动倍速；想要「变速不变调」，得先在音频软件里把素材处理好再导入。</td></tr>
+    <tr><td><b>裁剪会不会把音频文件删了</b></td><td>不会。裁剪只改「源内起 → 止」两个数，磁盘上的文件一个字节都没动：边缘拖回去、或把「裁剪终点」填回源音频长度，素材就全回来了。状态栏和片段上的<b>裁剪</b>角标都写着源内起止。</td></tr>
+    <tr><td><b>Alt + 边缘没反应</b></td><td>按顺序查三件事：① 要<b>先按住 Alt 再按下鼠标</b>（按下那一刻决定这次是裁剪还是移动，拖到一半才按没用）；② 「裁头」只在片段<b>最左 8px</b> 这一带生效；③ 片段是不是被<b>锁定</b>了（右键「解锁」）。</td></tr>
+    <tr><td><b>淡入淡出填不进去</b></td><td>淡入 + 淡出之和不许超过片段长度，超了会自动收短并在状态栏说明；片段很短（比如已经到 30ms 下限）时几乎没有留斜坡的余地。</td></tr>
+    <tr><td><b>起始页里的工程卡片是灰的</b></td><td>那个工程文件已经不在磁盘上了（被删、被移走、换了盘符）。卡片上直接写着路径和原因；把文件找回来，或重新保存到工程库即可。</td></tr>
+    <tr><td><b>想知道自己的机器什么配置 / 要反馈问题</b></td><td>起始页最下面的「系统信息 → <b>导出系统信息…</b>」会写一个 txt：Windows 版本与 build、位数、Electron / Chromium 版本、CPU 与内存、显卡与渲染状态（含有没有回退到软件渲染）、屏幕分辨率与缩放、音效库规模与首次加载耗时。这些数字都是导出那一刻现场读出来的，里面<b>不含用户名、主机名</b>，可以直接发给作者。</td></tr>
+    <tr><td><b>删不掉轨道</b></td><td>只剩一条轨道时删除按钮是灰的，至少要保留一条。</td></tr>
+    <tr><td><b>改了参数列表没变</b></td><td>时间轴和属性面板是双向绑定的：在属性面板改参数（含裁剪起止、淡入淡出、时长），时间轴上的片段条会跟着变；反过来拖动片段，属性面板的数字也会同步。</td></tr>
+  </table>
+
+  <h2 id="author"><span class="no">9</span>关于作者</h2>
+  <p>这个工具由 <b>句句的猎影</b> 制作，视频教程和更新动态发布在 B 站。点下面的按钮会用<b>系统默认浏览器</b>打开（不在本程序里内嵌网页）：</p>
+  <p>
+    <button class="author" id="btnAuthorBottom">作者 · B 站主页</button>
+    <span class="tip" style="margin-left:10px">https://space.bilibili.com/50955238</span>
+  </p>
+  <p class="tip" id="authorResult2"></p>
+  <p class="tip">音效分类与中文名依据中文 Minecraft Wiki 核对：方块名取自「方块」条目的方块列表，生物阵营取自「生物」条目的友好生物 / 敌对生物章节。</p>
+
+</main>
+
+<footer>
+  MCSoundStudio 内置使用教程 · 完全离线 · 起始页「打开使用教程」或 F1 打开的也是本页。<br>
+  需要给开发看的接口细节和校验规则，见工程根目录的 <code>README.md</code>。
+</footer>
+
+<script>
+  // 作者外链：绝对地址在这里，只此一处（主进程也有同样的常量，改动时两边一起改）。
+  var AUTHOR_URL = 'https://space.bilibili.com/50955238';
+
+  // 给自动化验证（scripts/verify-packaged-help-e2e.js）读的页面自述：
+  // 它据此断言「打开的是教程页」「六大主题都在」「作者地址就是要求的那一个」。
+  window.__HELP_PAGE__ = {
+    kind: 'help',
+    version: '0.1',
+    offline: true,
+    authorUrl: AUTHOR_URL,
+    topics: ['工程', '导入', '时间轴', '音效编辑', '导出', '快捷键'],
+  };
+
+  function openAuthor() {
+    var out = document.getElementById('authorResult');
+    var out2 = document.getElementById('authorResult2');
+    var say = function (txt, ok) {
+      if (out) out.textContent = txt;
+      if (out2) out2.textContent = txt;
+      // 供 e2e 读取：主进程 openExternal 的真实返回（url 由主进程回传，不是这里猜的）
+      window.__lastAuthorOpen = { url: AUTHOR_URL, ok: !!ok, message: txt };
+    };
+    if (window.mcs && typeof window.mcs.openExternal === 'function') {
+      window.mcs.openExternal(AUTHOR_URL).then(function (r) {
+        var ok = !!(r && r.ok);
+        say(ok ? '已交给系统浏览器打开：' + (r.url || AUTHOR_URL) : ('打开失败：' + ((r && r.error) || '未知原因')), ok);
+      }).catch(function (e) {
+        say('打开失败：' + (e && e.message ? e.message : e), false);
+      });
+    } else {
+      // 直接用浏览器打开本文件（没有 Electron 的主进程可用）时的退路
+      window.open(AUTHOR_URL, '_blank', 'noopener');
+      say('已请求浏览器打开：' + AUTHOR_URL, true);
+    }
+  }
+  document.getElementById('btnAuthorTop').addEventListener('click', openAuthor);
+  document.getElementById('btnAuthorBottom').addEventListener('click', openAuthor);
+</script>
+
+</body>
+</html>

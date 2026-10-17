@@ -1,0 +1,46 @@
+node_modules/
+sounds/vanilla/audio/
+/dist/
+*.log
+ui-shot*.png
+# —— 可再生临时输出（QA/开发脚本的一次性产物，重跑即可再生）：只认「仓库根级」
+#    专用目录，所以每条都以 / 开头 —— 不加锚定会在任意层级误伤，例如
+#    qa-evidence/tmp/ 下的证据、dev-verify-xxx/tmp-bpm/ 里的日志副本。
+#    清理白名单与保护名单见 scripts/qa-artifact-hygiene.js（只删白名单命中且无报告的候选）。
+#    刻意不忽略含证据/报告的根级 tmp-*（如 tmp-ctxmenu-dev/ 里的 dev-report.md），
+#    让它们在 git status 里保持可见，便于复核。
+/tmp-workflow-out/
+/tmp/
+/tmp-roundtrip/
+/tmp-bpm/
+!build/icon.ico
+!build/icon.png
+/tmp-long/
+/tmp-export-check/
+/tmp-icon-check/
+/tmp-sample-output/
+/tmp-qa-ctrls/
+/tmp-qa/
+# —— 每张卡的一次性「证据 / 自验」目录（机器生成、文件多、可重跑再生）：
+#    命名固定为 qa-*（QA 证据/报告）与 dev-verify-*（开发自验），规则见 README「工程卫生」。
+#    它们只被忽略、不会被删；这样每个 worker 的 git status 不会淹在噪声里。
+#    需要人工复核的报告请写成仓库根级 .md 文件或放进 docs/（那边是跟踪的）。
+#    ⚠️ 新增脚本必须先 commit 才留得住：只存在于工作区（未跟踪）的文件会被下一次
+#       「清理未跟踪文件」当垃圾删掉 —— 卡 t_650c6abf 就是这么丢掉
+#       scripts/run-core-regression.js / qa-artifact-hygiene.js / gif-parse-real.js 的。
+/qa-evidence/
+/qa-accept/
+/qa-verify-*/
+/qa-anchor-precheck/
+/qa-review-*/
+/dev-verify-*/
+
+# —— 发布前收尾（卡 t_02ae5b46）：`node scripts/clean.js`
+#    它是「对外发版前」那一步，白名单比日常卫生工具宽（dist/ release/ qa-*/ dev-verify-*/ tmp-*），
+#    但闸门更多：只认仓库根级单层条目、保护名单永不动、**已被 git 跟踪的条目一律不删**，
+#    含 *.md 报告的候选默认搬到仓库外归档（<仓库名>-archive-<时间戳>/），--purge 才真删。
+#    规则表在 scripts/clean.js 顶部；自测 scripts/clean-selftest.js。
+#    下面这条只是不让「根级一次性临时 JSON」再冒出来当噪声（clean.js 也会顺手清）。
+/tmp-*.json
+
+/release/

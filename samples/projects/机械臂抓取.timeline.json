@@ -1,0 +1,99 @@
+{
+  "version": 1,
+  "name": "机械臂抓取",
+  "config": {
+    "gridMs": 50,
+    "gridMode": "ms",
+    "snapToGrid": true,
+    "totalMs": 1000,
+    "bpm": 120,
+    "beatsPerBar": 4
+  },
+  "tracks": [
+    {
+      "name": "machine",
+      "label": "机械层",
+      "muted": false,
+      "solo": false,
+      "gain": 1
+    },
+    {
+      "name": "fx",
+      "label": "特效层",
+      "muted": false,
+      "solo": false,
+      "gain": 1
+    }
+  ],
+  "clips": [
+    {
+      "id": "clip_sample_1",
+      "soundId": "random.click",
+      "soundPath": "",
+      "label": "random.click",
+      "kind": "event",
+      "category": "block",
+      "variantCount": 4,
+      "startMs": 0,
+      "durationMs": 100,
+      "offsetMs": 0,
+      "volume": 0.9,
+      "pitch": 1,
+      "variantMode": "auto",
+      "lockedVariant": null,
+      "track": "machine",
+      "color": null,
+      "locked": false,
+      "note": "液压杆伸出"
+    },
+    {
+      "id": "clip_sample_2",
+      "soundId": "random.orb",
+      "soundPath": "",
+      "label": "random.orb",
+      "kind": "event",
+      "category": "player",
+      "variantCount": 6,
+      "startMs": 500,
+      "durationMs": 250,
+      "offsetMs": 0,
+      "volume": 1,
+      "pitch": 1.4,
+      "variantMode": "auto",
+      "lockedVariant": null,
+      "track": "machine",
+      "color": null,
+      "locked": false,
+      "note": "夹爪咬合（升调）"
+    },
+    {
+      "id": "clip_sample_3",
+      "soundId": "ambient.weather.thunder",
+      "soundPath": "",
+      "label": "ambient.weather.thunder",
+      "kind": "event",
+      "category": "ambient",
+      "variantCount": 2,
+      "startMs": 250,
+      "durationMs": 600,
+      "offsetMs": 0,
+      "volume": 0.5,
+      "pitch": 1,
+      "variantMode": "auto",
+      "lockedVariant": null,
+      "track": "fx",
+      "color": null,
+      "locked": false,
+      "note": "低频铺垫"
+    }
+  ],
+  "visual": {
+    "kind": "anim",
+    "path": null,
+    "dataUrl": null,
+    "animFile": "samples/robot-arm.animation.json",
+    "animName": "grab",
+    "naturalMs": 1000,
+    "manualMs": null
+  }
+}

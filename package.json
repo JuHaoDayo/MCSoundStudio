@@ -1,0 +1,56 @@
+{
+  "name": "mcsound-studio",
+  "version": "0.1.0",
+  "description": "Minecraft 音效时序编辑器 - 拖拽编排、动画对齐、导出策划案与 ModSDK 代码",
+  "main": "src/main/main.js",
+  "author": "",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "dist": "npm run release:zip",
+    "dist:portable": "electron-builder --win --x64 --dir",
+    "release:zip": "node scripts/build-release-zip.js",
+    "verify:portable-startup": "node scripts/verify-portable-startup.js",
+    "verify:migrate-userdata": "node scripts/migrate-userdata-to-f-selftest.js",
+    "verify:total-ms-reopen": "electron scripts/total-ms-reopen-regression.js",
+    "verify:p0-project-library": "electron scripts/p0-project-library-interaction-test.js"
+  },
+  "devDependencies": {
+    "archiver": "^5.3.2",
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.mcsound.studio",
+    "productName": "MCSoundStudio",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "src/**/*",
+      "build/icon.png",
+      "sounds/vanilla/*.json",
+      "sounds/vanilla/missing.txt",
+      "package.json",
+      "!**/node_modules/*/{CHANGELOG.md,README.md,readme.md}",
+      "!**/*.map"
+    ],
+    "extraResources": [
+      {
+        "from": "sounds",
+        "to": "sounds",
+        "filter": [
+          "vanilla/*.json",
+          "vanilla/missing.txt",
+          "vanilla/audio",
+          "vanilla/audio/**"
+        ]
+      }
+    ],
+    "win": {
+      "icon": "build/icon.ico"
+    }
+  }
+}

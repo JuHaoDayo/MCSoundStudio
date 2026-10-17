@@ -1,0 +1,22 @@
+{
+  "meta": {
+    "format_version": "4.5",
+    "model_format": "image"
+  },
+  "name": "纯贴图工程",
+  "resolution": {
+    "width": 64,
+    "height": 64
+  },
+  "elements": [],
+  "outliner": [],
+  "textures": [
+    {
+      "name": "x.png",
+      "id": "0",
+      "source": "data:image/png;base64,AAAA",
+      "width": 8,
+      "height": 8
+    }
+  ]
+}

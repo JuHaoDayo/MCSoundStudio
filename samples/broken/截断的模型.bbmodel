@@ -1,0 +1,358 @@
+{
+  "meta": {
+    "format_version": "4.5",
+    "model_format": "free",
+    "box_uv": false
+  },
+  "name": "机械臂",
+  "model_identifier": "sample_robot_arm",
+  "visible_box": [
+    1,
+    1,
+    0
+  ],
+  "variable_placeholders": "",
+  "resolution": {
+    "width": 64,
+    "height": 64
+  },
+  "elements": [
+    {
+      "name": "base-pad",
+      "uuid": "cube-base",
+      "type": "cube",
+      "from": [
+        -3,
+        0,
+        -3
+      ],
+      "to": [
+        3,
+        2,
+        3
+      ],
+      "origin": [
+        0,
+        0,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "uv": [
+        0,
+        0
+      ],
+      "faces": {
+        "north": {
+          "uv": [
+            0,
+            0,
+            16,
+            16
+          ],
+          "texture": 0,
+          "rotation": 0
+        },
+        "east": {
+          "uv": [
+            0,
+            0,
+            16,
+            16
+          ],
+          "texture": 0,
+          "rotation": 0
+        },
+        "south": {
+          "uv": [
+            0,
+            0,
+            16,
+            16
+          ],
+          "texture": 0,
+          "rotation": 0
+        },
+        "west": {
+          "uv": [
+            0,
+            0,
+            16,
+            16
+          ],
+          "texture": 0,
+          "rotation": 0
+        },
+        "up": {
+          "uv": [
+            32,
+            0,
+            48,
+            16
+          ],
+          "texture": 0,
+          "rotation": 0
+        },
+        "down": {
+          "uv": [
+            0,
+            0,
+            16,
+            16
+          ],
+          "texture": 0,
+          "rotation": 0
+        }
+      }
+    },
+    {
+      "name": "arm-column",
+      "uuid": "cube-arm",
+      "type": "cube",
+      "from": [
+        -1,
+        2,
+        -1
+      ],
+      "to": [
+        1,
+        8,
+        1
+      ],
+      "origin": [
+        0,
+        2,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "uv": [
+        0,
+        0
+      ],
+      "faces": {
+        "north": {
+          "uv": [
+            0,
+            0,
+            16,
+            16
+          ],
+          "texture": 0,
+          "rotation": 0
+        },
+        "east": {
+          "uv": [
+            0,
+            0,
+            16,
+            16
+          ],
+          "texture": 0,
+          "rotation": 0
+        },
+        "south": {
+          "uv": [
+            0,
+            0,
+            16,
+            16
+          ],
+          "texture": 0,
+          "rotation": 0
+        },
+        "west": {
+          "uv": [
+            0,
+            0,
+            16,
+            16
+          ],
+          "texture": 0,
+          "rotation": 0
+        },
+        "up": {
+          "uv": [
+            32,
+            0,
+            48,
+            16
+          ],
+          "texture": 0,
+          "rotation": 0
+        },
+        "down": {
+          "uv": [
+            0,
+            0,
+            16,
+            16
+          ],
+          "texture": 0,
+          "rotation": 0
+        }
+      }
+    },
+    {
+      "name": "forearm-rod",
+      "uuid": "cube-forearm",
+      "type": "cube",
+      "from": [
+        -0.5,
+        8,
+        -0.5
+      ],
+      "to": [
+        0.5,
+        12,
+        0.5
+      ],
+      "origin": [
+        0,
+        8,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "uv": [
+        0,
+        32
+      ],
+      "faces": {
+        "north": {
+          "uv": [
+            0,
+            32,
+            16,
+            48
+          ],
+          "texture": 0,
+          "rotation": 0
+        },
+        "east": {
+          "uv": [
+            0,
+            32,
+            16,
+            48
+          ],
+          "texture": 0,
+          "rotation": 0
+        },
+        "south": {
+          "uv": [
+            0,
+            32,
+            16,
+            48
+          ],
+          "texture": 0,
+          "rotation": 0
+        },
+        "west": {
+          "uv": [
+            0,
+            32,
+            16,
+            48
+          ],
+          "texture": 0,
+          "rotation": 0
+        },
+        "up": {
+          "uv": [
+            32,
+            0,
+            48,
+            16
+          ],
+          "texture": 0,
+          "rotation": 0
+        },
+        "down": {
+          "uv": [
+            0,
+            32,
+            16,
+            48
+          ],
+          "texture": 0,
+          "rotation": 0
+        }
+      }
+    },
+    {
+      "name": "claw-left",
+      "uuid": "cube-claw-l",
+      "type": "cube",
+      "from": [
+        -1.5,
+        12,
+        -1
+      ],
+      "to": [
+        -0.5,
+        14,
+        1
+      ],
+      "origin": [
+        0,
+        12,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "uv": [
+        0,
+        0
+      ],
+      "faces": {
+        "north": {
+          "uv": [
+            0,
+            0,
+            16,
+            16
+          ],
+          "texture": 0,
+          "rotation": 0
+        },
+        "east": {
+          "uv": [
+            0,
+            0,
+            16,
+            16
+          ],
+          "texture": 0,
+          "rotation": 0
+        },
+        "south": {
+          "uv": [
+            0,
+            0,
+            16,
+            16
+          ],
+          "texture": 0,
+          "rotation": 0
+        },
+        "west": {
+          "uv": [
+            0,
+            0,
+            16,
+            16
+          ],

@@ -1,0 +1,14 @@
+{
+  "format_version": "1.14.0",
+  "sound_definitions": {
+    "custom.test": {
+      "category": "block",
+      "sounds": [
+        {
+          "name": "custom/test",
+          "volume": 1
+        }
+      ]
+    }
+  }
+}

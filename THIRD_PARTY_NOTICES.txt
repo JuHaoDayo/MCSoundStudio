@@ -1,0 +1,10 @@
+MCSoundStudio 第三方内容说明
+============================
+
+MCSoundStudio 自有源代码按仓库根目录 LICENSE 所列的 MIT License 发布。
+
+Release ZIP 内置的试听 .ogg 音频仅来自 DeZoST/Minecraft-Sounds：
+https://github.com/DeZoST/Minecraft-Sounds
+该上游仓库声明 Apache License 2.0。MCSoundStudio 只将其中用于本应用离线试听的原版库内容随包分发，不收集、不打包、不分发任何用户个人音频。
+
+Minecraft 名称、原版音频及相关内容的权利仍归各自权利人所有。本说明不授予任何商标或原作内容的额外权利；使用、再分发或将音频用于本应用之外时，须自行遵守上游仓库许可及原权利人的适用条款。

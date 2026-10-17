@@ -1,0 +1,544 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>MCSoundStudio</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ==================== 顶栏 ==================== -->
+<header id="topbar">
+  <div class="brand">MCSoundStudio<span class="ver">v0.1</span></div>
+
+  <div class="tb-group">
+    <button id="btnBackToProjects" title="回到工程列表">← 工程</button>
+    <button id="btnNew" title="新建时序">新建</button>
+    <button id="btnOpenTimeline" title="打开 timeline.json">打开</button>
+    <button id="btnSaveTimeline" title="保存 timeline.json">保存</button>
+  </div>
+
+  <!-- 工程名是工程本身的设置，不是导出时才填写的参数。放在常用工具栏，
+       新建后可立刻命名；导出页的同名输入框只是这里的同步入口。 -->
+  <div class="tb-group project-name-ctrl">
+    <label for="inpProjectName">工程名</label>
+    <input id="inpProjectName" type="text" value="未命名时序"
+           aria-label="工程名称" title="修改工程名称（会写入 timeline.json）">
+  </div>
+
+  <div class="tb-group">
+    <button id="btnImportGif" title="导入 GIF / 视频 / 图片作为视觉参考">导入GIF/视频</button>
+    <button id="btnImportBB" title="导入 .bbmodel 模型">导入模型</button>
+    <button id="btnImportAnim" title="导入 .animation.json 动画">导入动画</button>
+  </div>
+
+  <div class="tb-group grid-ctrl">
+    <label>网格</label>
+    <select id="selGrid">
+      <option value="25">25ms</option>
+      <option value="50" selected>50ms (1tick)</option>
+      <option value="100">100ms</option>
+      <option value="250">250ms</option>
+      <option value="1000">1000ms</option>
+      <option value="beat">按拍（BPM）</option>
+    </select>
+    <label class="chk"><input type="checkbox" id="chkSnap" checked> 吸附</label>
+    <label>BPM</label>
+    <input type="number" id="inpBpm" value="0" min="0" max="400" step="1" style="width:56px">
+    <label class="chk"><input type="checkbox" id="chkBeats" checked> 拍线</label>
+  </div>
+
+  <div class="tb-group">
+    <label>总长(ms)</label>
+    <input type="number" id="inpTotalMs" value="5000" min="200" step="50" style="width:84px">
+  </div>
+
+  <div class="tb-spacer"></div>
+
+
+  <div class="tb-group">
+    <button id="btnExportAll" class="primary" title="导出全部（策划案 / 代码 / json）">导出全部 ▾</button>
+  </div>
+</header>
+
+<!-- ==================== 主体三栏 ==================== -->
+<main id="layout">
+
+  <!-- 左：音效库 -->
+  <aside id="leftPanel">
+    <div class="panel-head">
+      <span>音效库</span>
+      <div class="ph-actions">
+        <button id="btnLoadVanilla" class="mini primary" title="加载原版基岩版音效库（约 1000+ 个事件，含随机变体；具体数量以这次实际加载为准，状态栏会写「已加载原版音效库：N 个事件 / M 个变体」）">原版库</button>
+        <button id="btnScanFolder" class="mini" title="扫描本地文件夹">扫描…</button>
+        <button id="btnAddFiles" class="mini" title="添加音频文件">+文件</button>
+      </div>
+    </div>
+    <div class="panel-search">
+      <input id="inpSearch" type="text" placeholder="搜索音效名 / 路径…">
+      <!-- 清空按钮（卡 t_3623451f）：只在输入框有文字时出现；是原生 button，
+           鼠标点 / Tab 选中后回车都能用，另外输入框里按 Esc 也清空 -->
+      <button id="btnClearSearch" class="search-clear" type="button" hidden
+              title="清空搜索（Esc）" aria-label="清空搜索">✕</button>
+    </div>
+    <div id="soundList" class="sound-list">
+      <div class="empty-hint">点击「内置」加载自带音效库，<br>或「扫描…」选择你的音效文件夹。<br><br>直接拖到右侧轨道上即可。</div>
+    </div>
+  </aside>
+
+  <!-- 中：时间轴 -->
+  <section id="centerPanel">
+
+    <!-- 步骤条（卡 t_c54d031b）：① 模型/GIF 调整 ↔ ② 音效。
+         两个按钮都摆在第一屏、当前页有明显选中态 —— 以前预览区里一个入口都没有，
+         用户根本找不到「在哪摆模型角度」。切页只换右边的控件，画布还是同一块。 -->
+    <div id="stepBar" class="step-bar" role="tablist" aria-label="工作步骤">
+      <button id="btnStepAdjust" class="step-btn" role="tab" aria-selected="false"
+              title="摆模型角度、选动画、导入 GIF/视频/图片">① 模型/GIF 调整</button>
+      <button id="btnStepSound" class="step-btn active" role="tab" aria-selected="true"
+              title="时间轴 + 音效库 + 片段属性">② 音效</button>
+      <span class="step-hint" id="stepHint">摆好模型角度 / 放好 GIF，再回「② 音效」配音效</span>
+    </div>
+
+    <!-- 预览区（视觉参考） -->
+    <div id="previewArea">
+      <div id="previewStage">
+        <div id="previewEmpty" class="preview-empty">
+          <div class="pe-icon">🎞️</div>
+          <div>把 GIF 拖到这里，或点顶部「导入 GIF」</div>
+          <div class="pe-sub">GIF 会作为时间轴的视觉参考，与音效同步播放</div>
+        </div>
+        <canvas id="previewCanvas" style="display:none"></canvas>
+        <video id="previewVideo" style="display:none" muted playsinline></video>
+        <img id="previewGif" style="display:none">
+      </div>
+      <div id="previewMeta" class="preview-meta">
+        <span id="metaVisual">视觉：无</span>
+        <!-- 播放头越过 GIF 末尾时才出现：画面这时不再变化，只靠右边那行小字用户容易以为卡死 -->
+        <span id="metaTailBadge" class="meta-tail-badge" style="display:none">⏹ 画面已定格在 GIF 末帧</span>
+        <!-- 同时有模型和 GIF/视频时才出现：切「看模型 / 看 GIF」，两边都不丢（卡 t_fa17801d） -->
+        <button id="btnVisualSwitch" class="mini" style="display:none"
+                title="在模型预览和 GIF/视频预览之间切换">看模型</button>
+        <button id="btnRemoveMedia" class="mini preview-remove" style="display:none"
+                title="移除 GIF、视频或图片；不会影响已导入的模型">移除画面</button>
+        <button id="btnRemoveModel" class="mini preview-remove" style="display:none"
+                title="移除 Blockbench 模型；不会影响已导入的 GIF、视频或图片">移除模型</button>
+        <!-- 音效页里回调整页的近路（卡 t_c54d031b）：等价于点上面的「① 模型/GIF 调整」 -->
+        <button id="btnGoAdjust" class="mini" style="display:none"
+                title="回到「① 模型/GIF 调整」摆模型角度、换素材">去调整页</button>
+        <span id="metaDuration">总时长：--</span>
+        <span id="metaBones">骨骼：--</span>
+      </div>
+      <div id="previewResizer" title="拖动调整预览区高度"></div>
+    </div>
+
+    <!-- 传输控制 -->
+    <div id="transport">
+      <button id="btnPlay" class="tp-btn" title="播放 / 暂停 (Space)">▶</button>
+      <button id="btnStop" class="tp-btn" title="停止">■</button>
+      <span id="timeDisplay" class="time-display">0ms / 0ms</span>
+      <span class="tp-sep"></span>
+      <label class="tp-label">主音量</label>
+      <input type="range" id="rngMaster" min="0" max="1" step="0.01" value="1" style="width:90px">
+      <span id="masterVal" class="tp-val">100%</span>
+      <span class="tp-spacer"></span>
+      <label class="tp-label">缩放</label>
+      <input type="range" id="rngZoom" min="0.05" max="2" step="0.01" value="0.25" style="width:110px">
+      <span id="zoomVal" class="tp-val">0.25 px/ms</span>
+      <button id="btnZoomFit" class="tp-btn wide" title="缩放到整段铺满窗口 (F)">适合窗口</button>
+      <span class="tp-spacer"></span>
+    </div>
+
+    <!-- 时间轴 -->
+    <div id="timelineWrap">
+      <div id="rulerCol">
+        <div id="rulerSpacer">
+          <button id="btnAddTrack" title="新建一条轨道（用于分层：机械层 / 音效层 / 环境层）">+ 轨道</button>
+        </div>
+        <div id="trackLabelList"></div>
+      </div>
+      <div id="scrollArea">
+        <div id="ruler"></div>
+        <div id="laneArea"></div>
+        <!-- 框选用的选择框（在轨道空白处拖动时出现；放在 scrollArea 里才会跟着横向滚动） -->
+        <div id="selBox"></div>
+        <div id="playhead"></div>
+      </div>
+    </div>
+
+    <div id="statusBar">
+      <span id="statusMsg">就绪</span>
+      <span id="statusRight"></span>
+    </div>
+  </section>
+
+  <!-- 右：属性 / 校验 / 导出 -->
+  <aside id="rightPanel">
+    <div class="tabs">
+      <button class="tab active" data-tab="props">属性</button>
+      <button class="tab" data-tab="issues">校验 <span id="issueBadge" class="badge">0</span></button>
+      <button class="tab" data-tab="export">导出</button>
+    </div>
+
+    <!-- 属性页 -->
+    <div class="tab-body active" id="tab-props">
+      <div id="propsEmpty" class="empty-hint">选中时间轴上的音效片段<br>即可在此编辑参数。</div>
+      <!-- 多选时的摘要（选中 2 个以上片段时替代下面的单片段表单） -->
+      <div id="propsMulti" style="display:none">
+        <div id="propsMultiCount" style="font-size:13px;font-weight:600;margin-bottom:6px">已选中 0 个片段</div>
+        <div class="field-hint" id="propsMultiHint"></div>
+        <div class="field-row" style="margin-top:10px">
+          <button id="btnCopyMulti" class="mini">复制到剪贴板</button>
+          <button id="btnDeleteMulti" class="mini danger">删除这些片段</button>
+        </div>
+      </div>
+      <div id="propsForm" style="display:none">
+        <div class="field">
+          <label>标签</label>
+          <input id="pLabel" type="text">
+        </div>
+        <div class="field">
+          <label>音效事件名 <small>(sound_definitions.json 的 key)</small></label>
+          <input id="pSoundId" type="text" placeholder="mob.zombie.say">
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label>起始 (ms)</label>
+            <input id="pStart" type="number" step="10">
+          </div>
+          <div class="field">
+            <label>时长 (ms)</label>
+            <input id="pDuration" type="number" step="10">
+          </div>
+        </div>
+        <!-- 非破坏性裁剪：源内起止（卡 t_47b9fab2）。改这两个值不会销毁素材，
+             把「裁剪终点」拉回源音频结尾就恢复完整音效。 -->
+        <div class="field-row">
+          <div class="field">
+            <label>裁剪起点 (源内 ms) <small>(非破坏性)</small></label>
+            <input id="pOffset" type="number" step="10" min="0">
+          </div>
+          <div class="field">
+            <label>裁剪终点 (源内 ms) <small id="pSrcTotal">源音频 0ms</small></label>
+            <input id="pSrcEnd" type="number" step="10" min="0">
+          </div>
+        </div>
+        <div class="field-hint" id="pGeomHint"></div>
+        <!-- 效果预设：淡入 / 淡出（可见可选；片段条上会画出斜坡） -->
+        <div class="field">
+          <label>效果预设 <small>(淡入 / 淡出)</small></label>
+          <select id="pFadePreset">
+            <option value="none">无（硬切）</option>
+            <option value="fadeIn">淡入</option>
+            <option value="fadeOut">淡出</option>
+            <option value="fadeBoth">淡入 + 淡出</option>
+            <option value="soft">软起软落（长淡）</option>
+            <option value="clickFree">极短淡（去爆音）</option>
+            <option value="custom">自定义（手改淡入 / 淡出）</option>
+          </select>
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label>淡入 (ms)</label>
+            <input id="pFadeIn" type="number" step="10" min="0">
+          </div>
+          <div class="field">
+            <label>淡出 (ms)</label>
+            <input id="pFadeOut" type="number" step="10" min="0">
+          </div>
+        </div>
+        <div class="field-hint tight">播放倍速就是「音高」：拖片段左右边缘改长度会自动等比改它（磁带式变速，音高跟着变）。</div>
+        <div class="field-row">
+          <div class="field">
+            <label>音量 <span id="pVolVal" class="v">1.00</span></label>
+            <input id="pVolume" type="range" min="0" max="1" step="0.01" value="1">
+          </div>
+          <div class="field">
+            <label>音高 <span id="pPitchVal" class="v">1.00</span></label>
+            <input id="pPitch" type="range" min="0.25" max="4" step="0.01" value="1">
+            <div class="field-hint tight">1.00 = 原速；数值越大音调越高、播得越快。引擎允许 0–256，这里只给常用范围。</div>
+          </div>
+        </div>
+        <div class="field">
+          <label>音高精确值 <small>(0-256，超出 0.5~2 会明显变声)</small></label>
+          <input id="pPitchNum" type="number" step="0.01" min="0" max="256">
+        </div>
+        <!-- 「循环播放 / 循环区间终点」已在卡 t_6b5016ec 里整体移除：
+             需要重复播放就复制片段（右键「再复制一份」或 Ctrl+D），
+             面板上不再保留这两个控件。 -->
+        <div class="field-row">
+          <div class="field">
+            <label>轨道</label>
+            <select id="pTrack"></select>
+          </div>
+          <div class="field">
+            <label>变体 <small>(多变的音效二选一)</small></label>
+            <select id="pVariant">
+              <option value="auto">随机变体（游戏内随机，默认）</option>
+              <option value="locked">指定变体（固定播其中一个）</option>
+            </select>
+            <div class="field-hint" id="pVariantModeHint"></div>
+          </div>
+          <div class="field" id="pVariantPickField" style="display:none">
+            <label>指定哪一个 <small>(列表来自音频库)</small></label>
+            <select id="pVariantPick"></select>
+            <div class="field-hint" id="pVariantPickHint"></div>
+          </div>
+        </div>
+        <div class="field">
+          <label>备注 <small>(会写进策划案)</small></label>
+          <textarea id="pNote" rows="2"></textarea>
+        </div>
+        <div class="field-row">
+          <button id="btnAudition" class="mini">▶ 试听这个音效</button>
+          <button id="btnCopyClip" class="mini">复制</button>
+          <button id="btnDeleteClip" class="mini danger">删除</button>
+        </div>
+        <div class="field-hint" id="pPreviewHint"></div>
+        <div class="field-hint" id="pSource"></div>
+      </div>
+    </div>
+
+    <!-- 校验页 -->
+    <div class="tab-body" id="tab-issues">
+      <div class="issue-actions">
+        <button id="btnRevalidate" class="mini">重新校验</button>
+      </div>
+      <div id="issueList"></div>
+    </div>
+
+    <!-- 导出页 -->
+    <div class="tab-body" id="tab-export">
+      <div class="field">
+        <label>时序名称</label>
+        <input id="eName" type="text" value="未命名时序">
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label>ModSDK 命名空间</label>
+          <input id="eNamespace" type="text" value="mymod">
+        </div>
+        <div class="field">
+          <label>函数名</label>
+          <input id="eFuncName" type="text" value="playMachineSequence">
+        </div>
+      </div>
+      <div class="field">
+        <label>自定义音效目录 <small>(资源包内)</small></label>
+        <input id="eCustomFolder" type="text" value="custom">
+      </div>
+      <div class="export-list">
+        <button class="exp-btn" data-exp="preview">📄 预览导出内容</button>
+        <button class="exp-btn" data-exp="markdown">📝 策划案 Markdown (.md)</button>
+        <button class="exp-btn" data-exp="python">🐍 ModSDK Python (.py)</button>
+        <button class="exp-btn" data-exp="sounddef">📦 sound_definitions.json</button>
+        <button class="exp-btn" data-exp="soundfx">🎬 动画 sound_effects 片段</button>
+        <button class="exp-btn" data-exp="timeline">💾 timeline.json（回存）</button>
+      </div>
+      <div class="field-hint">「导出全部」会一次性写入这 5 个文件到同一目录。</div>
+    </div>
+
+    <!-- ==================== ① 模型/GIF 调整页的面板（卡 t_c54d031b） ====================
+         调整页没有片段可编辑，所以它**替换**音效页的标签页（属性 / 校验 / 导出）：
+         上半「素材槽」、中间「角度」、下半「动画」。
+         角度读数与画布共用同一份状态（STATE.doc.visual），所以切回音效页看到的角度
+         就是这里调好的那个 —— 不存在「两个页面各记一份角度」。
+         「动画」那一格由后续卡（t_96cd9241）接两档列表，这里先如实说明现状。 -->
+    <div id="adjustPanel" class="adjust-panel">
+      <div class="adj-sec">
+        <div class="adj-title">素材槽</div>
+
+        <div class="adj-slot">
+          <div class="adj-slot-head">
+            <span class="adj-slot-label">模型</span>
+            <span class="adj-slot-sub" id="slotModelSub"></span>
+          </div>
+          <div class="adj-slot-name" id="slotModelName">还没有模型：点「导入模型」选 .bbmodel</div>
+          <div class="adj-slot-actions">
+            <button id="btnSlotImportModel" class="mini">导入模型</button>
+            <button id="btnSlotRemoveModel" class="mini danger">移除模型</button>
+          </div>
+        </div>
+
+        <div class="adj-slot">
+          <div class="adj-slot-head">
+            <span class="adj-slot-label">画面参考</span>
+            <span class="adj-slot-sub" id="slotMediaSub"></span>
+          </div>
+          <div class="adj-slot-name" id="slotMediaName">还没有画面参考：点「导入」选 GIF、视频或图片</div>
+          <div class="adj-slot-actions">
+            <button id="btnSlotImportMedia" class="mini">导入</button>
+            <button id="btnSlotRemoveMedia" class="mini danger">移除</button>
+          </div>
+          <div class="field-hint" id="slotMediaHint">GIF / 视频跟着时间轴播放与暂停；图片只作画面参考。</div>
+        </div>
+      </div>
+
+      <div class="adj-sec">
+        <div class="adj-title">角度</div>
+        <div class="field-hint tight">按住画面拖动 = 转模型；滚轮 = 缩放；Shift + 拖动 = 挪位置。</div>
+
+        <div class="adj-row">
+          <label for="inpAngleX">X（上下）</label>
+          <input type="number" id="inpAngleX" min="-180" max="180" step="1">
+          <span class="adj-unit">°</span>
+        </div>
+        <div class="adj-row">
+          <label for="inpAngleY">Y（左右）</label>
+          <input type="number" id="inpAngleY" min="-180" max="180" step="1">
+          <span class="adj-unit">°</span>
+        </div>
+        <div class="adj-row">
+          <label for="inpAngleZ">Z（画面内滚转）</label>
+          <input type="number" id="inpAngleZ" min="-180" max="180" step="1">
+          <span class="adj-unit">°</span>
+        </div>
+        <div class="adj-row">
+          <label for="rngAngleZoom">缩放</label>
+          <input type="range" id="rngAngleZoom" min="0.25" max="4" step="0.05" value="1">
+          <span class="adj-val" id="angleZoomVal">1.00×</span>
+        </div>
+        <div class="adj-row">
+          <button id="btnResetAngle" class="mini">重置角度</button>
+          <span class="field-hint tight" id="angleResetHint">默认视角：X=-20° / Y=-32° / Z=0° / 缩放=1</span>
+        </div>
+      </div>
+
+      <div class="adj-sec">
+        <div class="adj-title">动画</div>
+        <!-- 动画两档（卡 t_96cd9241）：按「这条动画里有没有表达式」分堆。
+             关键帧动画档 = 全部关键帧都是数值（画布上能完整播）；
+             Molang 语言动画档 = 含表达式的动画 —— **本期不求值**，画布上按「保持前一帧」播，
+             列表里逐处标注哪一处不会动、按什么处理。不假装支持，也不静默丢帧。 -->
+        <div class="anim-modes" id="animModeBar" role="tablist" aria-label="动画模式">
+          <button id="btnAnimModeKey" class="seg-btn active" role="tab" aria-selected="true"
+                  title="这条动画里全部关键帧都是数值，画布上能完整播出来">关键帧动画</button>
+          <button id="btnAnimModeMolang" class="seg-btn" role="tab" aria-selected="false"
+                  title="含表达式的动画：本期不求值，画布上按「保持前一帧」播，列表里逐处标注">Molang 语言动画</button>
+        </div>
+        <div class="field-hint tight" id="animModeHint">关键帧动画：这条动画里全部关键帧都是数值，画布上能完整播出来。</div>
+
+        <div class="adj-slot-actions anim-actions">
+          <button id="btnAnimImport" class="mini">导入动画</button>
+          <span class="field-hint tight" id="animCountHint"></span>
+        </div>
+
+        <!-- 列表：一行一条动画，点一行就在画布上按播放头摆出它的姿态（内容由 app.js 渲染） -->
+        <div id="animList" class="anim-list" role="listbox" aria-label="动画列表"></div>
+        <!-- 空状态：没有动画 / 没有 Molang / 有表达式但不会求值 —— 三种都有文案，不给空白面板 -->
+        <div class="anim-empty" id="animEmpty" style="display:none"></div>
+        <div class="anim-support" id="animSupport" style="display:none"></div>
+
+        <div class="adj-row anim-playmode">
+          <span class="adj-slot-label">播放方式</span>
+          <button id="btnPlayModeFollow" class="mini active" aria-selected="true"
+                  title="画布跟着时间轴播放头走（默认，与改动前一致）">跟随播放头</button>
+          <button id="btnPlayModeStandalone" class="mini" aria-selected="false"
+                  title="在调整页自己循环播这条动画，不动时间轴播放头">独立预览</button>
+        </div>
+        <div class="field-hint" id="adjustPlayModeHint">播放方式：跟随时间轴播放头（拖标尺 / 播放都能看姿态）。</div>
+      </div>
+    </div>
+  </aside>
+</main>
+
+<!-- ==================== 起始页（工程列表） ==================== -->
+<!-- 启动先到这里；只有新建或打开工程后才进入上面的工作页。 -->
+<div id="overview" class="ov-backdrop" style="display:none">
+  <div class="ov-panel">
+    <div class="ov-head">
+      <span class="ov-title">MCSoundStudio <span class="ver">v0.1</span></span>
+    </div>
+    <section class="start-actions" aria-label="开始">
+      <div>
+        <div class="start-section-title">开始</div>
+        <div class="start-section-sub">新建一个空工程，或继续编辑已有的 timeline.json。</div>
+      </div>
+      <div class="start-action-buttons">
+        <button id="ovBtnNew" class="primary">＋ 新建工程</button>
+        <button id="ovBtnOpenFile">打开工程文件…</button>
+      </div>
+    </section>
+    <div class="ov-project-head">
+      <span class="start-section-title">我的工程</span>
+      <div class="ov-actions">
+        <button id="ovBtnOpenFolder" class="mini">打开工程库文件夹</button>
+        <button id="ovBtnRefresh" class="mini">刷新</button>
+      </div>
+    </div>
+    <div id="ovHint" class="ov-hint"></div>
+    <!-- 工程库里读不了的文件（JSON 坏了 / 不是工程）：只报数字用户不知道该修哪个，
+         所以直接把文件名和原因列出来（卡 t_5a1c18be 第二条）。默认展开，可以收起。 -->
+    <details id="ovSkipped" class="ov-skip" style="display:none">
+      <summary id="ovSkippedSummary"></summary>
+      <ul id="ovSkippedList"></ul>
+      <div class="ov-skip-tip">这些文件只是被跳过，其它工程不受影响。修好内容、或把它们从工程库目录里移走，它们就不会再出现在这里。</div>
+    </details>
+    <div id="ovGrid" class="ov-grid"></div>
+    <div id="ovFoot" class="ov-foot"></div>
+    <section class="start-link-section">
+      <div>
+        <div class="start-section-title">上手教程</div>
+        <div class="start-section-sub">第一次使用？可以先看“上手三步”和“快捷键”。</div>
+      </div>
+      <button id="ovBtnHelp">打开使用教程</button>
+    </section>
+    <section class="start-link-section">
+      <div>
+        <div class="start-section-title">关于作者</div>
+        <div class="start-section-sub">作者主页会在系统默认浏览器中打开。</div>
+      </div>
+      <button id="ovBtnAuthor">作者 · B 站主页</button>
+    </section>
+    <!-- 系统信息（卡 t_20c2e144）：把「这台机器到底什么配置」写成一个 txt，
+         发给作者排查兼容性/性能问题用。数字全是导出那一刻现场读出来的。 -->
+    <section class="start-link-section">
+      <div>
+        <div class="start-section-title">系统信息</div>
+        <div class="start-section-sub">导出一份 txt：Windows 版本 / 位数 / CPU 与内存 / 显卡与渲染状态 / 屏幕缩放 / 库规模与首次加载耗时。</div>
+      </div>
+      <button id="ovBtnSysInfo">导出系统信息…</button>
+    </section>
+  </div>
+</div>
+
+<!-- ==================== 导出预览 / 报告 弹窗 ==================== -->
+<div id="modal" class="modal-backdrop" style="display:none">
+  <div class="modal">
+    <div class="modal-head">
+      <span id="modalTitle">预览</span>
+      <div>
+        <button id="btnCopyModal" class="mini">复制</button>
+        <button id="btnSaveModal" class="mini primary">另存为…</button>
+        <button id="btnCloseModal" class="mini">关闭</button>
+      </div>
+    </div>
+    <pre id="modalBody" class="modal-body"></pre>
+  </div>
+</div>
+
+<!-- 时间轴右键菜单（内容由 app.js 的 setupLaneContextMenu 动态生成） -->
+<div id="clipMenu"></div>
+
+<!-- 拖拽提示层 -->
+<div id="dropOverlay" class="drop-overlay" style="display:none">
+  <div class="do-box">松开以导入</div>
+</div>
+
+<script src="timeline.js"></script>
+<script src="wiki-names.js"></script>
+<script src="parsers.js"></script>
+<script src="event-audio.js"></script>
+<!-- 音效库子类分组规则（卡 t_3623451f）：物品使用族 / 玩法域，纯数据 + 纯函数 -->
+<script src="library-groups.js"></script>
+<script src="audio.js"></script>
+<script src="waveform.js"></script>
+<script src="gif.js"></script>
+<!-- 模型/动画进预览画布（卡 t_fa17801d）：纯数学 + 绘制，最后接线 -->
+<script src="model-view.js"></script>
+<script src="model-preview.js"></script>
+<!-- 工程总览浮层（卡 t_fa17801d） -->
+<script src="overview.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
