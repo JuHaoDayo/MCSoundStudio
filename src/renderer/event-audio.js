@@ -48,7 +48,7 @@ function pickVariant(event, index) {
 }
 
 /**
- * 变体模式归一（卡 t_3623451f）。
+ * 变体模式归一。
  *
  * 只有两种模式，全流程（试听 / 时间轴播放 / 保存 / 导出）必须用同一个判据：
  *   'locked' = 指定变体（固定播某一个）    'auto' = 随机变体（游戏内随机）
@@ -172,7 +172,7 @@ function resolveForPlayback(clip) {
  *
  * bottle 是官方 sound_definitions 里真实存在的 category（v1.26.50.4 里只有
  * bottle.dragonbreath / bottle.empty / bottle.fill 三条，都属于「用瓶子装/倒」）。
- * 卡 t_41c27a7a 把这 3 条接回库之后，界面会多出一个分类桶，所以这里必须有中文名，
+ * 把这 3 条接回库之后，界面会多出一个分类桶，所以这里必须有中文名，
  * 否则界面会直接显示英文「bottle」。
  */
 const CATEGORY_LABEL = {
@@ -227,7 +227,7 @@ const THEME_GROUPS = FALLBACK_GROUPS;
 const MOB_ALIAS = {
   endermen: 'enderman',
   enderdragon: 'ender_dragon',
-  // 卡 t_4e96920b：mob.elderguardian.* 是基岩版旧事件 ID，和 mob.elder_guardian
+  // mob.elderguardian.* 是基岩版旧事件 ID，和 mob.elder_guardian
   // 是同一个生物 —— 不归一的话「敌对生物」下会多出一个英文组名（词典也缺条目）
   elderguardian: 'elder_guardian',
   wanderingtrader: 'wandering_trader',
@@ -310,7 +310,7 @@ const NON_MOB = [
   /^stonecutter/i, /^loom/i, /^cartography/i, /^composter/i, /^brewing/i,
   /^enchanting_table/i, /^cauldron/i, /^bundle/i, /^brush/i, /^mace/i,
   /^spyglass/i, /^lead\./i, /^map\./i, /^bottle/i, /^chime/i,
-  // 鞘翅是装备（物品）音，不是生物；card t_41c27a7a 接回 elytra.loop 时补上
+  // 鞘翅是装备（物品）音，不是生物；card  接回 elytra.loop 时补上
   /^elytra\./i,
   /\bstep$/i, /\.fall$/i, /\.break$/i, /\.place$/i, /\.hit$/i,
 ];
@@ -339,7 +339,7 @@ function mobKeyOf(event) {
  *   minecart.base / minecart.inside       → 矿车不是生物，归「其他」
  *   raid.horn                             → 袭击是事件类音效，归「其他」
  *
- * imitate.fuse 存疑说明（卡 t_494d72c9）：它没有 mob. 前缀，官方字幕 key 是
+ * imitate.fuse 存疑说明：它没有 mob. 前缀，官方字幕 key 是
  * subtitles.entity.creeper.primed（苦力怕拉起引信），与 sounds/random/fuse 同文件；
  * 同一族里 30 条 mob.imitate.* 已确认是鹦鹉模仿，但 imitate.fuse 是否也是鹦鹉配音
  * 官方没有直接写明（zh_CN.lang 里 subtitles.entity.parrot.imitate.creeper 没有任何
@@ -388,7 +388,7 @@ function fixedCategory(event, category) {
     // 这条必须放在按 key 查 Wiki 阵营**之前**：key 取的是被模仿者
     // （mob.imitate.blaze → blaze → 敌对），先查名单就会把鹦鹉的声音归进敌对生物。
     // 修正前就是这个顺序，导致 29 条落在敌对生物、mob.imitate.wolf 掉在友好生物，
-    // 同一族分裂成两个桶（卡 t_494d72c9）。
+    // 同一族分裂成两个桶。
     if (/^mob\.imitate\./.test(event)) return 'friendly';
 
     if (W && W.FRIENDLY && W.FRIENDLY.includes(key)) return 'friendly';
@@ -410,7 +410,7 @@ window.MCS_EVENTS = {
   getVariants,
   pickVariant,
   resolveForPlayback,
-  // 变体语义（卡 t_3623451f）：模式判据 / 指定变体下标 / 导出用的钉变体名
+  // 变体语义：模式判据 / 指定变体下标 / 导出用的钉变体名
   variantModeOf,
   lockedVariantIndex,
   pinnedIndex,

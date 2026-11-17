@@ -364,7 +364,7 @@ function rawText(v) {
 /**
  * 读一个关键帧 / 常量通道的三轴值。
  *
- * **禁止静默删帧**（卡 t_96cd9241）：以前只要有一个轴读不出数字（典型就是 Molang
+ * **禁止静默删帧**：以前只要有一个轴读不出数字（典型就是 Molang
  * 表达式 `"query.anim_time * 90"`），整个关键帧就被 `continue` 丢掉，界面上却照报
  * 「关键帧时间点（3 个）」。现在这一帧照样进轨道 —— 该轴按「保持前一帧的数值」处理
  * （前面没有数值帧就用 0），同时把这处**原样**记进 expressions 清单，
@@ -521,7 +521,7 @@ function extractAnimationTracks(text) {
           if (raw == null) {
             // 连原文都给不出（null / true / 空对象之类）：这一帧照样进轨道，按「保持前一帧」处理，
             // 并把原文记进清单 —— 以前这里在第一帧上会直接 continue，把帧**静默丢掉**，
-            // 界面还照报「时间点 N 个」（卡 t_96cd9241 明令禁止）。
+            // 界面还照报「时间点 N 个」（明令禁止）。
             expressions.push({
               bone: bn, channel: ch, t: tv, axes: ['xyz'], raw: rawText(kf),
               kept: prev ? prev.slice() : [0, 0, 0], hadPrev: !!prev, isExpr: false, kind: 'frame',
@@ -572,10 +572,10 @@ function extractAnimationTracks(text) {
 }
 
 /**
- * 模型 `.bbmodel` 自带的 animations → 可采样轨道（卡 t_96cd9241 第 2 条）。
+ * 模型 `.bbmodel` 自带的 animations → 可采样轨道（第 2 条）。
  *
  * 为什么要有它：以前模型自带动画只在弹窗里报一句「模型内动画（1 条）：grab …」，
- * 画布上根本用不了（卡 t_9fd9ce60 现状盘点 §1.4）。结构对齐 extractAnimationTracks()，
+ * 画布上根本用不了（现状盘点 §1.4）。结构对齐 extractAnimationTracks()，
  * 两档列表因此可以共用一套渲染与采样路径。
  *
  * Blockbench 的写法：每个 animator（type='bone'，name = 骨骼名）挂一串关键帧
@@ -653,7 +653,7 @@ function numOrDef(v) {
 function numOrNull(v) {
   if (typeof v === 'number') return isFinite(v) ? v : null;
   if (typeof v === 'string') {
-    // 纯空白 / 空串不算「0」：它是读不出数值，不是数值 0（卡 t_96cd9241）
+    // 纯空白 / 空串不算「0」：它是读不出数值，不是数值 0
     if (!v.trim()) return null;
     const n = Number(v.trim());
     return isFinite(n) ? n : null;
@@ -719,7 +719,7 @@ function sampleAnimationPose(animTracks, ms) {
 // ---------------------------------------------------------------------------
 // 导入失败诊断
 //
-// 目标（卡 t_fa17801d）：导入失败不许只丢 `String(e.stack)`。
+// 目标：导入失败不许只丢 `String(e.stack)`。
 // 每条诊断都要回答三件事：① 文件哪里不对 ② 是不是导错了按钮 ③ 怎么修。
 // ---------------------------------------------------------------------------
 
@@ -975,9 +975,9 @@ window.MCS_PARSERS = {
   parseBBModel,
   crossCheckBones,
   checkTextures,
-  // 预览用：可采样的关键帧轨道 + 某一时刻的姿态（卡 t_fa17801d）
+  // 预览用：可采样的关键帧轨道 + 某一时刻的姿态
   extractAnimationTracks,
-  // 动画两档（关键帧 / Molang，卡 t_96cd9241）：
+  // 动画两档（关键帧 / Molang）：
   //   模型 .bbmodel 自带动画 → 同一套轨道；表达式帧如实上报，不静默丢
   extractBBModelAnimationTracks,
   animationStats,

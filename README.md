@@ -5,7 +5,7 @@
 ## 下载即用
 
 1. 到 [Releases](https://github.com/JuHaoDayo/MCSoundStudio/releases/latest) 下载 `MCSoundStudio-<版本>-win-x64.zip`
-2. 解压到任意位置（约 957 MiB）
+2. 解压到任意位置（约 948.1 MiB）
 3. 双击 `MCSoundStudio\MCSoundStudio.exe`
 
 不需要安装，不写注册表，不建快捷方式。**所有数据都在解压目录的 `data\` 里**，删掉整个目录就等于清除全部数据，可以整个拷到 U 盘带走。
@@ -22,7 +22,7 @@
 ## 系统要求
 
 - Windows 10 / 11（x64）
-- 磁盘：解压后约 957 MiB（从源码自己构建另需约 3 GB）
+- 磁盘：解压后约 948.1 MiB（从源码自己构建另需约 3 GB）
 - 首次启动加载音效索引约 0.1 秒；不联网
 
 ## 数据存放

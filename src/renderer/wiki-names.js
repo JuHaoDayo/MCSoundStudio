@@ -206,7 +206,7 @@
     endermen: '末影人', fish: '鱼', agent: '智能体',
     // 旧版 ID 变体（基岩版历史上同一生物有复数写法）
     enderdragon: '末影龙',
-    // 卡 t_4e96920b：基岩版旧事件 ID 里远古守卫者写作 elderguardian
+    // 基岩版旧事件 ID 里远古守卫者写作 elderguardian
     // （mob.elderguardian.curse/death/hit/idle），词典里只有 elder_guardian，
     // 于是这 4 条在「敌对生物」下顶着英文组名。别名表（event-audio.js MOB_ALIAS）
     // 同时把它并回 elder_guardian，和 mob.imitate.elder_guardian 归同一组。

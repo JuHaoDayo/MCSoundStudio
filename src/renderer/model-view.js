@@ -1,5 +1,5 @@
 /**
- * model-view.js — .bbmodel 模型 + 动画在**预览画布**上的显示（卡 t_fa17801d）
+ * model-view.js — .bbmodel 模型 + 动画在**预览画布**上的显示
  *
  * 背景：此前「导入模型」只是解析成功 + 弹一张报告，「导入动画」只是解析出时长
  * 与骨骼名 —— 预览区里什么都不显示，用户看到的是「导入成功，但画布还是空的」。
@@ -149,14 +149,45 @@ function boxUvFor(uv, from, to) {
   };
 }
 
-/** 面 uv 的 90/270 度旋转（Blockbench 允许单面转 uv） */
-function rotateUv(uv, deg) {
-  const d = ((Number(deg) || 0) % 360 + 360) % 360;
+/**
+ * per-face uv 旋转 → **每个顶点的 uv**
+ *
+ * 以前的写法 rotateUv() 只改「采样矩形」：180 与 0 得到同一个矩形、90 与 270 也是同一个
+ * （正方形面四种 rotation 完全相同），90/270 还会把矩形挪到旁边的贴图区域 —— 因为旋转
+ * 从来没作用到顶点上。Blockbench 的语义不是「转矩形」，而是「转顶点 → 纹理参数的对应」：
+ *
+ *   CubeFace.UVToLocal（blockbench commit ec0b2827, js/outliner/types/cube.js:74-119）
+ *     for (let i = 0; i < rotation; i += 90) [lx, ly] = [1 - ly, lx];
+ *   uv 矩形 [u1,v1,u2,v2] 本身不变，变的只是四个角各自取矩形里的哪个点。
+ *   ⇒ 0/90/180/270 是 4 种不同的映射；非正方形面也是「原地转」，不会采样到别处。
+ *
+ * 本函数返回 4 个 [u,v]，顺序与 FACES[*].corners 一致
+ *   （左上→右上→右下→左下 = 参数 (0,0)→(1,0)→(1,1)→(0,1)）。
+ * rotation 的取值按官方循环语义处理（每满 90° 转一次，只允许 0/90/180/270 是正常用法）。
+ *
+ * 注意：box UV 模式没有 per-face rotation 可言 —— Blockbench 在 box_uv 下不导出
+ * per-face uv/uv_size/uv_rotation，切到 box UV 时还会把每面 rotation 归零
+ * （bedrock.js:940-945、cube.js:657-659）。所以这里只给 per-face uv 用，box UV 恒按 0° 处理。
+ */
+function faceUvCorners(uv, rotation) {
   const [u1, v1, u2, v2] = uv;
-  if (d === 90) return [u1, v1, u1 + (v2 - v1), v1 + (u2 - u1)];
-  if (d === 180) return [u1, v1, u1 + (u2 - u1), v1 + (v2 - v1)];   // 保持矩形范围
-  if (d === 270) return [u1, v1, u1 + (v2 - v1), v1 + (u2 - u1)];
-  return uv;
+  const deg = Number(rotation) || 0;
+  const turns = deg > 0 ? Math.min(3, Math.ceil(deg / 90) % 4) : 0;
+  const params = [[0, 0], [1, 0], [1, 1], [0, 1]];
+  const out = [];
+  for (let i = 0; i < 4; i++) {
+    let px = params[i][0];
+    let py = params[i][1];
+    for (let t = 0; t < turns; t++) {
+      const nx = 1 - py;
+      const ny = px;
+      px = nx;
+      py = ny;
+    }
+    // lerp(u1, u2, px) / lerp(v1, v2, py)：u2<u1、v2<v1（镜像 uv）也照样成立
+    out.push([u1 + px * (u2 - u1), v1 + py * (v2 - v1)]);
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -206,16 +237,30 @@ function buildScene(bbInfo) {
     for (const fdef of FACES) {
       const raw = rawFaces[fdef.name];
       let uv = null;
+      let uvCorners = null;
       let texture = null;
       if (raw && Array.isArray(raw.uv)) {
-        uv = rotateUv(raw.uv.map(Number), raw.rotation);
+        // per-face UV：uv 矩形本身不变，rotation 只改「四个顶点各取矩形里的哪个点」
+        //（以前 rotateUv 把 rotation 折进矩形范围，180 等于没转 —— 修的就是这个）
+        uv = raw.uv.map(Number);
+        if (uv.some((x) => !isFinite(x))) continue;
+        uvCorners = faceUvCorners(uv, raw.rotation);
         texture = raw.texture == null ? null : Number(raw.texture);
       } else if (boxUvs && boxUvs[fdef.name]) {
         uv = boxUvs[fdef.name];
+        // box UV 没有 per-face rotation 这个字段（Blockbench 边界），恒按 0°
+        uvCorners = faceUvCorners(uv, 0);
       }
       if (!uv || uv.some((x) => !isFinite(x))) continue;
       if (uv[0] === uv[2] || uv[1] === uv[3]) continue;    // 零面积面（Blockbench 用它表示「不画」）
-      faces.push({ name: fdef.name, uv, texture, normal: fdef.normal.slice(), corners: fdef.corners(from, to) });
+      faces.push({
+        name: fdef.name,
+        uv,
+        uvCorners,                        // 4 个顶点的 uv（顺序同 corners），渲染端按它贴图
+        texture,
+        normal: fdef.normal.slice(),
+        corners: fdef.corners(from, to),
+      });
     }
     cubes.push({
       uuid: el.uuid,
@@ -346,12 +391,20 @@ function normalize(v) {
   return [v[0] / l, v[1] / l, v[2] / l];
 }
 
-// 默认视角：偏右前方、**从上往下看**（俯视）。
-// pitch 的符号很关键：相机在 -Z 侧朝 +Z 看，绕 X 转负角才会把模型的顶面
-// 转到朝向相机的一侧；给正角会变成「从下往上看」，顶面被背面剔除掉
-// —— 实测就是这么发现「所有面都是侧面贴图、顶面一个像素都没有」的。
+// 默认视角：偏左前方（看到北面 + 西面）、**从上往下看**（俯视）。
+// 相机约定（修正）：相机在 **-Z 侧朝 +Z 看**（看到模型的「北面」north，即
+// Blockbench 的初始视角 —— BB 的初始相机按 Format.forward_direction 取 [-40,32,-40]，
+// 站在模型的西北上方看北面）。此前真正的 bug 是**屏幕水平方向取反了**：
+// 朝 +Z 看时观察者的右手是 -X，但 toScreen 用的是 +screen_x = world_x，
+// 于是同一正面视角下左右对称地镜像了一遍（贴图 u 增大方向落在屏幕左边），
+// 用户报的「左右不对称标记与 Blockbench 不一致」就是它。
+// 现在只在 toScreen 里把 x 取反（见 toScreen），视角方向、剔除、深度顺序都不动。
+// 参数语义保持不变（拖拽手感、工程里保存的 angle.x/angle.y 都不用改）：
+//   参数 pitch 变负 = 从上往下看（顶面进入视野）；参数 yaw 变大 = 正面往右滑
+//   （app.js 的拖动已相应改成「往右拖 → yaw 变大」，见 bindAdjustCanvas 的注释）。
 const DEFAULT_VIEW = { yaw: -32, pitch: -20, margin: 0.12 };
-const LIGHT = normalize([-0.45, 0.75, -0.55]);   // 相机空间光方向
+// 相机空间光方向：x 为正 = 从屏幕左侧打光（镜像修正后屏幕右 = -相机空间 x）；z 为负 = 光在相机这一侧
+const LIGHT = normalize([0.45, 0.75, -0.55]);
 
 /**
  * 静止姿态在相机空间里的包围盒（相机矩阵入参，可缓存）。
@@ -392,6 +445,7 @@ function projectScene(scene, pose, opts) {
   const margin = o.margin == null ? DEFAULT_VIEW.margin : o.margin;
   const cull = o.cull !== false;
 
+  // 相机在 -Z 侧朝 +Z 看（= Blockbench 初始视角），见上面 DEFAULT_VIEW 的说明。
   const cam = mat3Mul(mat3FromEulerDeg(pitch, 0, 0), mat3FromEulerDeg(0, yaw, 0));
   const aff = poseAffines(scene, pose);
 
@@ -454,6 +508,7 @@ function projectScene(scene, pose, opts) {
         normal: worldNormal,
         shade: 0.55 + 0.45 * lit,
         uv: face.uv.slice(),
+        uvCorners: (face.uvCorners || faceUvCorners(face.uv, 0)).map((c) => c.slice()),   // 4 顶点 uv（渲染贴图用）
         texture: face.texture,
       });
     }
@@ -481,14 +536,17 @@ function projectScene(scene, pose, opts) {
   const cy = (fminY + fmaxY) / 2;
   const offset = [W / 2, H / 2];
 
+  // 左右镜像修正：相机在 -Z 侧朝 +Z 看时，观察者的右手是 **-X**，
+  // 所以屏幕 x 必须取 -q[0]；原来写成 +q[0]，等于把画面水平镜像了一遍
+  // （贴图 u 增大方向跑到屏幕左边），和 Blockbench 同一正面视角左右对不上。
   const toScreen = (q) => [
-    offset[0] + (q[0] - cx) * scale,
+    offset[0] - (q[0] - cx) * scale,
     offset[1] - (q[1] - cy) * scale,
   ];
   for (const poly of polys) {
     poly.points = poly.camPoints.map(toScreen);
   }
-  // ---- 视角后处理：滚转（Z）/ 缩放 / 位移（卡 t_c54d031b 的「调整页」）----
+  // ---- 视角后处理：滚转（Z）/ 缩放 / 位移（的「调整页」）----
   // 正投影下「屏幕内绕中心转 + 缩放 + 平移」与「相机绕视线滚转 + 拉近 + 平移」完全等价，
   // 所以放在这里做一次 2D 变换即可：既不碰相机矩阵，也不碰上面的**静止姿态**自适应缩放
   // （restFitBounds 仍按静止姿态算 —— 改成按当前姿态算，播放动画时整块画面会抖）。
@@ -624,18 +682,34 @@ function renderToCanvas(canvas, scene, pose, opts) {
     ctx.closePath();
 
     if (img) {
-      // 正投影下矩形 → 平行四边形，一次仿射就能精确贴合
+      // 正投影下四边形 → 平行四边形，一次仿射就能精确贴合。
+      // 贴图的源不取「轴对齐矩形」而是**每个顶点自己的 uv**：
+      // 解 纹理像素坐标 → 屏幕 的仿射 M（由 c0→p0、c1→p1、c3→p3 三点定出），
+      // rotation 90/180/270 只是同一块矩形换了角，仿射里自然就是「原地转」，
+      // 不会像旧代码那样把矩形挪到旁边的贴图区域，也不会把 180° 当成没转。
       ctx.clip();
-      const [u1, v1, u2, v2] = poly.uv;
-      const sw = u2 - u1;
-      const sh = v2 - v1;
-      const a = (p[1][0] - p[0][0]) / sw;
-      const b = (p[1][1] - p[0][1]) / sw;
-      const c = (p[3][0] - p[0][0]) / sh;
-      const d = (p[3][1] - p[0][1]) / sh;
-      ctx.setTransform(dpr * a, dpr * b, dpr * c, dpr * d, dpr * p[0][0], dpr * p[0][1]);
-      ctx.imageSmoothingEnabled = false;
-      ctx.drawImage(img, u1, v1, sw, sh, 0, 0, sw, sh);
+      const uc = poly.uvCorners || [
+        [poly.uv[0], poly.uv[1]], [poly.uv[2], poly.uv[1]],
+        [poly.uv[2], poly.uv[3]], [poly.uv[0], poly.uv[3]],
+      ];
+      const c0 = uc[0], c1 = uc[1], c3 = uc[3];
+      const du1 = c1[0] - c0[0], dv1 = c1[1] - c0[1];
+      const du3 = c3[0] - c0[0], dv3 = c3[1] - c0[1];
+      const det = du1 * dv3 - du3 * dv1;
+      if (Math.abs(det) > 1e-9) {
+        const x1 = p[1][0] - p[0][0], y1 = p[1][1] - p[0][1];
+        const x3 = p[3][0] - p[0][0], y3 = p[3][1] - p[0][1];
+        // M = S屏幕 · S纹理⁻¹（[a c; b d] 是 canvas 的 setTransform 三分量）
+        const a = (x1 * dv3 - x3 * dv1) / det;
+        const c = (x3 * du1 - x1 * du3) / det;
+        const b = (y1 * dv3 - y3 * dv1) / det;
+        const d = (y3 * du1 - y1 * du3) / det;
+        const e = p[0][0] - (a * c0[0] + c * c0[1]);
+        const f = p[0][1] - (b * c0[0] + d * c0[1]);
+        ctx.setTransform(dpr * a, dpr * b, dpr * c, dpr * d, dpr * e, dpr * f);
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(img, 0, 0);
+      }
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       // 方向光：压暗背光面，让立方体看得出立体
       if (poly.shade < 1) {
@@ -700,7 +774,7 @@ window.MCS_MODELVIEW = {
   // 纯函数（node 里可直接跑）
   mat3Identity, mat3Mul, mat3Apply, mat3FromEulerDeg, mat3Scale,
   affineIdentity, affineCompose, affineApply, affineAboutPivot,
-  buildScene, poseAffines, projectScene, boxUvFor, FACE_BY_NAME, DEFAULT_VIEW,
+  buildScene, poseAffines, projectScene, boxUvFor, faceUvCorners, FACE_BY_NAME, DEFAULT_VIEW,
   // 需要 DOM
   resolveTextureDataUrls, loadImage, renderToCanvas, canvasStats,
 };

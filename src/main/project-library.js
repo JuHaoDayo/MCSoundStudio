@@ -45,7 +45,7 @@ function libraryFileName(name) {
 
 /**
  * 工程库里这个名字对应的文件在不在？在就返回 { path, fileName, sizeBytes, mtimeMs }，否则 null。
- * 用来回答「保存当前到工程库之前要不要先问一句同名覆盖」（卡 t_5a1c18be 第一条）。
+ * 用来回答「保存当前到工程库之前要不要先问一句同名覆盖」。
  */
 function findLibraryProject(dir, name) {
   const d = path.resolve(String(dir || ''));
@@ -65,7 +65,7 @@ function findLibraryProject(dir, name) {
  * （括号和空格 safeFileName 都保留，所以生成的还是合法文件名；
  *   默认工程名固定，「新建 → 存」连来两次必然走到这里。）
  *
- * 名字**已经带 ` (n)` 后缀**时接着往后顺延（卡 t_26c09aac 第三条）：
+ * 名字**已经带 ` (n)` 后缀**时接着往后顺延：
  * `X (2)` → `X (3)`，而不是在整串名字上再套一层 ——
  * 套娃出来的「`X (2) (2)`」在卡片上读不出和 (2) 的区别，等于把用户搞糊涂。
  */
@@ -115,7 +115,7 @@ function describeDoc(doc) {
   for (const c of clips) {
     const start = Number(c.startMs) || 0;
     const dur = Number(c.durationMs) || 0;
-    // 片段末端 = 起点 + 条长。（「循环播放」已在卡 t_6b5016ec 里整体移除：
+    // 片段末端 = 起点 + 条长。（「循环播放」已在里整体移除：
     // 老工程里夹带的 loop / loopEndMs 不再参与缩略条宽度计算，按普通片段算。）
     const end = start + dur;
     if (start < firstMs) firstMs = start;

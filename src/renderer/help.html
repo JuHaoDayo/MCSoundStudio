@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!--
-  MCSoundStudio 内置使用教程（卡 t_7ee2bf5b）。
+  MCSoundStudio 内置使用教程。
 
   为什么是一个独立 HTML 文件：
     · 这是一个「可离线打开」的成品文档 —— 起始页点「打开使用教程」或编辑时按 F1 打开的窗口加载的就是它，
@@ -13,13 +13,13 @@
   「作者」按钮走 window.mcs.openExternal()（preload 暴露）→ 主进程 shell.openExternal，
   用系统默认浏览器打开，绝对地址见下面的 AUTHOR_URL（与 main.js 里的常量保持一致）。
 
-  卡 t_c68d978a：补上「变速 / Alt 非破坏性裁剪 / 淡入淡出·效果预设 / 工程库」四类
+  补上「变速 / Alt 非破坏性裁剪 / 淡入淡出·效果预设 / 工程库」四类
   已经上线但教程里没写的能力，并把「原版库 N 个事件」这类**会随库变动的写死数字**
   改成不会过期的写法（约 1000+ 个，以实际加载为准）。
   新能力的手势与边界都对着 src/renderer/timeline.js（几何真值）和 app.js（拖拽 /
   属性面板入口）逐条核对过，改本文件时请同样核对，别凭印象写。
 
-  卡 t_706f52cd：5.1「范围 0.25x ~ 4x」那条以前引的是**属性面板改「时长」**路径的状态栏
+  5.1「范围 0.25x ~ 4x」那条以前引的是**属性面板改「时长」**路径的状态栏
   原文，照 5.1 拖右缘时看不到它。现在改成分别引用两条路径真实会出现的句子
   （拖边缘 =「已到 4x / 0.25x 倍速上限，再拖声音就铺不满这条了」；
   面板改时长 = 多一句「声音会提前播完或在条尾被切断」）。
@@ -30,89 +30,115 @@
 <meta charset="UTF-8">
 <title>MCSoundStudio 使用教程</title>
 <style>
+  /* ORE UI：与主界面同一套令牌——方角、硬边、绿色主按钮、
+     三级灰阶、中文 14px。文档内容与锚点一字未改，只换视觉。 */
   :root {
-    --bg: #14161a; --bg-2: #1b1e24; --bg-3: #22262e;
-    --fg: #e8eaf0; --fg-2: #b9c0cc; --fg-3: #8b93a1;
-    --border: #31363f; --accent: #4f9cf9; --accent-2: #f9a04f;
-    --ok: #3fbf72; --warn: #d29922;
+    --bg: #17191b; --panel: #313338; --raised: #484b50; --sunken: #202225;
+    --edge: #111214; --groove: #1b1d20;
+    --ink: #f4f4f4; --muted: #c6c8cc; --muted-2: #9ea2a7;
+    --green: #3c8527; --green-hover: #4f9c35; --green-edge: #245016; --green-lite: #8aca61;
+    --yellow: #ffd55c; --err: #ff8580; --face: #d0d1d4; --face-ink: #202124;
+    --mono: "Consolas", "Cascadia Mono", ui-monospace, monospace;
   }
-  * { box-sizing: border-box; }
+  * { box-sizing: border-box; border-radius: 0; }
+  /* 目录锚点跳转的落点补偿。
+     header 是 position:sticky，实测高 63.2px（上下 padding 各 10px + 按钮 37.2px + 底边框 2px；
+     字体度量不同会有零点几像素浮动）。以前点目录跳转时浏览器把标题滚到视口最顶端
+     （top≈0.15px），整块被 sticky 顶栏盖住：实测 11 个链接里前 10 个
+     标题矩形 0.15~37.94px 全在顶栏内，elementFromPoint 命中 <header>，正文直接从「轨道（分层）」
+     开始，只有最后「9 关于作者」因为页面滚到底才露出来。
+     这里给滚动容器预留 72px（= 实测顶栏 63.2px 向上取整再留 ~9px 呼吸位），对页内
+     a[href^="#"] 点击、直接带 #hash 打开、以及 scrollIntoView 都生效，不需要 JS 监听 hash，
+     也不影响正常向下滚动。只加这一处：再加 scroll-margin-top 会和它叠加成 124px 的空白。
+     改顶栏高度/字号时，这个数字要跟着量一遍再改。 */
+  html { scroll-padding-top: 72px; }
   body {
     margin: 0; padding: 0 0 60px;
-    background: var(--bg); color: var(--fg-2);
-    font: 14px/1.8 "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+    background: var(--bg); color: var(--muted);
+    font: 14px/1.8 "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+    user-select: text;
   }
   header {
     position: sticky; top: 0; z-index: 5;
     display: flex; align-items: center; gap: 12px;
-    padding: 14px 28px; background: var(--bg-2);
-    border-bottom: 1px solid var(--border);
+    padding: 10px 28px; background: #34363a;
+    border-bottom: 2px solid var(--edge);
   }
-  header h1 { margin: 0; font-size: 17px; color: var(--fg); flex: 1; }
-  header .ver { font-size: 12px; color: var(--fg-3); font-weight: 400; margin-left: 8px; }
+  header h1 { margin: 0; font-size: 18px; color: var(--ink); flex: 1; font-weight: 800; letter-spacing: -.3px; }
+  header .ver {
+    font-size: 12px; color: var(--muted-2); font-weight: 700; margin-left: 8px;
+    border: 1px solid #6b6f75; background: var(--sunken); padding: 1px 5px;
+  }
   main { max-width: 900px; margin: 0 auto; padding: 0 28px; }
   h2 {
-    margin: 34px 0 10px; padding-bottom: 7px; font-size: 16px; color: var(--fg);
-    border-bottom: 1px solid var(--border);
+    margin: 34px 0 10px; padding-bottom: 7px; font-size: 16px; color: var(--ink); font-weight: 700;
+    border-bottom: 2px solid var(--edge);
   }
   h2 .no {
-    display: inline-block; min-width: 22px; margin-right: 8px; padding: 0 6px;
-    background: var(--accent); color: #0c0f14; border-radius: 4px;
-    font-size: 13px; text-align: center;
+    display: inline-block; min-width: 24px; margin-right: 8px; padding: 0 6px;
+    background: var(--green); color: #fff; border: 2px solid var(--edge);
+    font-size: 13px; text-align: center; font-weight: 700;
   }
-  h3 { margin: 20px 0 6px; font-size: 14px; color: var(--fg); }
+  h3 { margin: 20px 0 6px; font-size: 14px; color: var(--ink); font-weight: 700; }
   p { margin: 9px 0; }
   ul, ol { margin: 8px 0; padding-left: 22px; }
   li { margin: 4px 0; }
   code, kbd {
-    font-family: Consolas, "Courier New", monospace; font-size: 12.5px;
-    background: var(--bg-3); border: 1px solid var(--border);
-    border-radius: 3px; padding: 1px 5px; color: var(--fg);
+    font-family: var(--mono); font-size: 13px;
+    background: var(--raised); border: 2px solid var(--edge);
+    padding: 1px 5px; color: var(--ink);
   }
-  kbd { border-bottom-width: 2px; white-space: nowrap; }
-  a { color: var(--accent); }
+  kbd { border-bottom-width: 3px; white-space: nowrap; }
+  a { color: var(--green-lite); }
+  a:hover { color: #b6e893; }
   table { border-collapse: collapse; width: 100%; margin: 10px 0; font-size: 13px; }
-  th, td { border: 1px solid var(--border); padding: 6px 10px; text-align: left; vertical-align: top; }
-  th { background: var(--bg-2); color: var(--fg); font-weight: 600; }
+  th, td { border: 2px solid var(--edge); padding: 6px 10px; text-align: left; vertical-align: top; }
+  th { background: #34363a; color: var(--ink); font-weight: 700; }
+  td { background: #2b2d31; }
   td:first-child { white-space: nowrap; }
   .toc {
-    margin: 20px 0 0; padding: 14px 20px;
-    background: var(--bg-2); border: 1px solid var(--border); border-radius: 6px;
+    margin: 20px 0 0; padding: 12px 16px;
+    background: var(--panel); border: 2px solid var(--edge);
   }
-  .toc b { color: var(--fg); }
+  .toc b { color: var(--ink); }
   .toc a { display: inline-block; margin: 2px 14px 2px 0; }
   .note {
-    margin: 12px 0; padding: 10px 14px; border-radius: 4px;
-    border-left: 3px solid var(--accent); background: rgba(79, 156, 249, .10);
+    margin: 12px 0; padding: 10px 14px;
+    border: 2px solid var(--edge); border-left: 5px solid var(--green-lite);
+    background: #2b3a26;
   }
   .warn {
-    margin: 12px 0; padding: 10px 14px; border-radius: 4px;
-    border-left: 3px solid var(--warn); background: rgba(210, 153, 34, .12);
+    margin: 12px 0; padding: 10px 14px;
+    border: 2px solid var(--edge); border-left: 5px solid var(--yellow);
+    background: #3d382a;
   }
-  .warn b { color: var(--warn); }
-  .tip { color: var(--fg-3); font-size: 12.5px; }
+  .warn b { color: var(--yellow); }
+  .tip { color: var(--muted-2); font-size: 13px; }
   button {
-    font: inherit; cursor: pointer; color: var(--fg);
-    background: var(--bg-3); border: 1px solid var(--border);
-    border-radius: 5px; padding: 7px 14px;
+    font: inherit; cursor: pointer; color: var(--face-ink);
+    background: var(--face); border: 2px solid var(--edge);
+    padding: 6px 14px; min-height: 32px; font-weight: 600;
+    box-shadow: inset 0 2px #f2f3f4, inset 0 -3px #8b8d90;
   }
-  button:hover { border-color: var(--accent); color: #fff; }
+  button:hover { background: #eceef0; border-color: var(--edge); color: var(--face-ink); }
+  button:active { background: #b6b8bb; box-shadow: inset 0 2px #777; transform: translateY(1px); }
+  button:focus-visible, a:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
   button.author {
-    background: var(--accent); border-color: var(--accent);
-    color: #0c0f14; font-weight: 600;
+    background: var(--green); color: #fff;
+    box-shadow: inset 0 2px #6ab44d, inset 0 -3px var(--green-edge);
   }
-  button.author:hover { background: #6cb0ff; }
-  #authorResult { font-size: 12.5px; color: var(--ok); margin-left: 10px; }
+  button.author:hover { background: var(--green-hover); color: #fff; }
+  #authorResult { font-size: 13px; color: var(--green-lite); margin-left: 10px; }
   footer {
     max-width: 900px; margin: 44px auto 0; padding: 18px 28px 0;
-    border-top: 1px solid var(--border); color: var(--fg-3); font-size: 12.5px;
+    border-top: 2px solid var(--edge); color: var(--muted-2); font-size: 13px;
   }
 </style>
 </head>
 <body>
 
 <header>
-  <h1>MCSoundStudio 使用教程<span class="ver" id="helpVersion">v0.1</span></h1>
+  <h1>MCSoundStudio 使用教程<span class="ver" id="helpVersion">v0.2.0</span></h1>
   <button class="author" id="btnAuthorTop">作者 · B 站主页</button>
   <span id="authorResult"></span>
 </header>
@@ -356,7 +382,7 @@
   <h3>选中集与编辑</h3>
   <table>
     <tr><td><kbd>Ctrl</kbd>+<kbd>C</kbd></td><td>复制选中的片段（可多个）</td></tr>
-    <tr><td><kbd>Ctrl</kbd>+<kbd>V</kbd></td><td>粘贴到<b>播放头</b>位置，片段之间的相对间距保持不变</td></tr>
+    <tr><td><kbd>Ctrl</kbd>+<kbd>V</kbd></td><td>粘贴到<b>播放头</b>位置，片段之间的相对间距保持不变；落到<b>当前选中轨</b>（没选中轨道时回各自原轨，状态栏会写明）</td></tr>
     <tr><td><kbd>Ctrl</kbd>+<kbd>A</kbd></td><td>全选时间轴上的所有片段</td></tr>
     <tr><td><kbd>Delete</kbd> / <kbd>Backspace</kbd></td><td>删除选中的<b>全部</b>片段（多选时一起删）</td></tr>
     <tr><td><kbd>Ctrl</kbd>+<kbd>Z</kbd></td><td><b>撤销</b>上一步改动：删除 / 移动 / 改长度 / 裁剪 / 淡入淡出 / 改参数 / 改总长……各算一步，<b>一次拖动只算一步</b></td></tr>

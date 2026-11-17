@@ -1,6 +1,6 @@
 {
   "name": "mcsound-studio",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Minecraft 音效时序编辑器 - 拖拽编排、动画对齐、导出策划案与 ModSDK 代码",
   "main": "src/main/main.js",
   "author": "",
@@ -38,6 +38,18 @@
       "!**/*.map"
     ],
     "extraResources": [
+      {
+        "from": "LICENSE",
+        "to": "LICENSE"
+      },
+      {
+        "from": "THIRD_PARTY_NOTICES.txt",
+        "to": "THIRD_PARTY_NOTICES.txt"
+      },
+      {
+        "from": "THIRD_PARTY_LICENSES",
+        "to": "THIRD_PARTY_LICENSES"
+      },
       {
         "from": "sounds",
         "to": "sounds",

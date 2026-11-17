@@ -21,6 +21,24 @@ const DEFAULT_CONFIG = {
   beatsPerBar: 4,
 };
 
+/**
+ * 时间轴总长（ms）的硬上限 ——
+ *
+ * 为什么必须有上限：总长直接决定时间轴的像素宽度（总长 × 缩放 px/ms）和标尺刻度的
+ * 条数。以前「总长(ms)」输入框没有任何上限，粘一个 21 位数字再按 Tab 失焦，
+ * renderTimeline() 就会按那个数去铺刻度（循环次数 ≈ 总长 / 刻度步长），渲染进程
+ * 当场卡死、整窗再也点不动（两轮实测复现）。
+ *
+ * 取 3600000ms（1 小时）的理由：
+ *   · 它已经是既有验证过的「长时序」值（QA 用 3600000ms 验过终点几何、缩放、拖拽），
+ *     不能再往上收；
+ *   · 3600000ms × ZOOM_MAX(4 px/ms) = 1.44e7 px，仍在浏览器可用的布局宽度之内
+ *     （Chrome 约 3.35e7 px），不会出现「元素宽得画不出来 / 滚动全歪」；
+ *   · 单条音效时序（Minecraft 事件 / 环境声）实际用不到更长。
+ * 超上限的输入必须明确拒绝并说明原因，绝不静默截断成一堆用户没同意的数。
+ */
+const MAX_TOTAL_MS = 3600000;
+
 /** 一条音效片段（clip） */
 function makeClip(opts) {
   return {
@@ -56,7 +74,7 @@ function makeClip(opts) {
     // playbackRate 都是「磁带式变速」（速度与音高一起变），所以这里只有一个旋钮，
     // 拖片段右边缘改条长时改的就是它。
     pitch: opts.pitch != null ? opts.pitch : 1.0,      // 0..256（中国版），安全区 0.5..2
-    // 「循环播放」已在卡 t_6b5016ec 里整体移除：传进来的 loop / loopEndMs 一律忽略，
+    // 「循环播放」已在里整体移除：传进来的 loop / loopEndMs 一律忽略，
     // 片段只「播一次」。要重复播放 = 复制片段（右键「再复制一份」/ Ctrl+D）。
 
     // 效果：淡入 / 淡出（毫秒）。0 = 硬切。两者之和不得超过条长（normalizeFades 保证）。
@@ -217,7 +235,7 @@ function audibleMs(c) {
 }
 
 /**
- * 拖右边缘改条长 = 等比改倍速（卡 t_47b9fab2 第 1 条）。
+ * 拖右边缘改条长 = 等比改倍速（第 1 条）。
  * 素材长度不变，条长变成 newDur 时倍速 = 原倍速 × 原条长 ÷ 新条长。
  * 倍速会被钳到 [0.25, 4]：撞上限时等式不再成立（声音会提前播完或在条尾被切断），
  * 返回的 clamped 让调用方能如实告诉用户。
@@ -231,6 +249,10 @@ function setStretchedDuration(c, newDur) {
   const rate = Math.max(MIN_RATE, Math.min(MAX_RATE, want));
   c.durationMs = dur;
   c.pitch = Math.round(rate * 1000) / 1000;
+  // 条长变短后「淡入 + 淡出」可能超过条长。所有让 durationMs 变小的入口
+  // （面板改时长、普通拖右边缘、Alt 裁剪头/尾、改裁剪终点、拆分）都必须走同一个
+  // normalizeFades（先收淡入、再收淡出），不允许另起一套规则。
+  normalizeFades(c);
   return { dur, rate: c.pitch, want: Math.round(want * 1000) / 1000, clamped: Math.abs(want - rate) > 1e-6 };
 }
 
@@ -253,6 +275,7 @@ function setTrimmedTail(c, newDur) {
   c.durationMs = dur;
   // 拉到自然结尾就把「裁尾」标记清掉：文档里不留一条等于全长的假裁剪
   c.srcEndMs = (out >= total - 0.5) ? null : Math.round(out);
+  normalizeFades(c);                 // 裁尾把条长改小 → 淡入淡出同步收短
   return { dur, out: c.srcEndMs, hitEnd: want > maxDur + 0.5 };
 }
 
@@ -276,6 +299,7 @@ function setTrimmedHead(c, deltaMs) {
   c.startMs = newStart;
   c.offsetMs = Math.max(0, Math.round(inMs + actual * rate));
   c.durationMs = Math.max(MIN_DURATION_MS, Math.round(end - newStart));
+  normalizeFades(c);                 // 裁头把条长改小 → 淡入淡出同步收短
   return { delta: actual, offsetMs: c.offsetMs, hitStart: want < minDelta - 0.5, hitMin: want > maxDelta + 0.5 };
 }
 
@@ -388,7 +412,7 @@ function validate(doc) {
       issues.push({ level: 'error', clipId: c.id, message: '未指定音效' });
     }
 
-    // ---- 裁剪 / 变速 / 淡入淡出（卡 t_47b9fab2）----
+    // ---- 裁剪 / 变速 / 淡入淡出----
     // 只报「真的有问题」的：正常编辑出来的值不会踩到这些分支。
     if (c.offsetMs != null && c.offsetMs < 0) {
       issues.push({ level: 'error', clipId: c.id, message: `裁剪起点 ${c.offsetMs}ms 为负（源内入点不能小于 0）` });
@@ -458,7 +482,7 @@ function fmtMs(ms) {
 }
 
 /**
- * 取原版音效库（卡 t_3623451f）。
+ * 取原版音效库。
  * 渲染进程里由 event-audio.js 提供 window.MCS_EVENTS；导出逻辑也可能被脚本沙箱
  * 单独调用（没加载那个模块），这时返回空对象 —— 导出仍然能跑，只是不写变体相关的行。
  */
@@ -475,7 +499,7 @@ function exportSoundName(c) {
 
 function exportMarkdown(doc) {
   const v = doc.visual;
-  // 总长以顶栏「总长(ms)」为准（卡 t_6b99a1fd）：以前这里优先取素材的自然时长，
+  // 总长以顶栏「总长(ms)」为准：以前这里优先取素材的自然时长，
   // 于是「用户改了总长、导入动画后又变回素材长度」，导出的策划案和界面对不上。
   const totalMs = doc.config.totalMs;
   const L = [];
@@ -593,7 +617,7 @@ function exportMarkdown(doc) {
     L.push('');
   }
 
-  // 裁剪起止 / 变速 / 淡入淡出（卡 t_47b9fab2）：只要有一样，就单独写一节。
+  // 裁剪起止 / 变速 / 淡入淡出：只要有一样，就单独写一节。
   // 为什么单开一节而不是往上面那张表里塞列：上面那张表的位置是稳定的（别的脚本按
   // 「第几列是时长」在核对），而起止裁剪要写清楚「源内起 → 源内止 + 素材长度 + 条长」，
   // 塞进去会把表挤得没法看。
@@ -632,7 +656,7 @@ function exportMarkdown(doc) {
     }
   }
 
-  // 指定变体（卡 t_3623451f）：随机变体是引擎行为（写事件名就够），指定变体必须
+  // 指定变体：随机变体是引擎行为（写事件名就够），指定变体必须
   // 写清楚「具体哪一个文件」，否则策划照着表去听会听到另一个变体 —— 库里 863 个
   // 事件有多个变体，这不是边角情况。
   const pinned = sorted.map((c) => ({
@@ -666,7 +690,7 @@ function exportModSDKPython(doc, opts) {
   const o = opts || {};
   const ns = o.namespace || 'mymod';
   const funcName = o.funcName || 'playMachineSequence';
-  // 同 exportMarkdown：总长只认顶栏的值（卡 t_6b99a1fd）
+  // 同 exportMarkdown：总长只认顶栏的值
   const totalMs = doc.config.totalMs;
   const sorted = doc.clips.slice().sort((a, b) => a.startMs - b.startMs);
 
@@ -825,20 +849,20 @@ function exportSoundDefinitions(doc, opts) {
   // 收集所有音效：有 soundId 的直接用；没有的（自定义音频）生成一个 id
   const defs = {};
   const seen = new Set();        // 自定义音频的 id 去重（老逻辑）
-  const seenPins = new Set();    // 钉变体名去重（卡 t_4e96920b）
+  const seenPins = new Set();    // 钉变体名去重
   // 记录被跳过的原版事件，写进注释让用户知道为什么文件是空的
   const vanillaSkipped = [];
-  // 指定变体（卡 t_3623451f）注册出来的「钉变体名」，同样的原因要写进注释
+  // 指定变体注册出来的「钉变体名」，同样的原因要写进注释
   const pinnedRegs = [];
 
   for (const c of doc.clips) {
     // 原版事件已在游戏内注册，不需要重复定义；
     // 但要在导出说明里讲清楚，否则用户会以为导出失败
     if (c.kind === 'event' && c.soundId) {
-      // 例外：指定变体（卡 t_3623451f）。原版事件名底下挂着一串变体、引擎随机挑，
+      // 例外：指定变体。原版事件名底下挂着一串变体、引擎随机挑，
       // 想固定成某一个，只能另注册一个 key（sounds 里只放那一个文件）。
       //
-      // 去重必须按「钉变体名」而不是事件名（卡 t_4e96920b 修）：
+      // 去重必须按「钉变体名」而不是事件名（修）：
       // 以前这里是 `const id = c.soundId || c.label; if (seen.has(id)) continue;`
       // —— 去重发生在「这是不是指定变体」判断**之前**，于是同一个事件在时间轴上
       // 出现两次、只有第二个片段选了「指定变体」时，第二个片段整段被跳过：
@@ -945,7 +969,7 @@ function exportAnimationSoundEffects(doc, opts) {
     const entry = {
       // 指定变体的片段要用「注册过的钉变体名」（同 exportSoundDefinitions / Python）：
       // 以前这里写 c.soundId，于是一个钉住第 3 个变体的片段在动画里仍写原事件名，
-      // 引擎照样随机 —— 和另外三个产物对不上（卡 t_4e96920b 顺带修）。
+      // 引擎照样随机 —— 和另外三个产物对不上（顺带修）。
       effect: c.shortName || exportSoundName(c),
     };
     if (c.volume !== 1.0) entry.volume = c.volume;
@@ -957,9 +981,9 @@ function exportAnimationSoundEffects(doc, opts) {
 }
 
 // ---------------------------------------------------------------------------
-// 导入容错：外部工程缺字段时补齐（卡 t_59ec2202）
+// 导入容错：外部工程缺字段时补齐
 //
-// 背景（实测，见 dev-verify-t_59ec2202/probe-pitch-compat-BEFORE-fix.log）：
+// 背景（实测）：
 //   把一份手改过 / 第三方工具生成的 *.timeline.json 放进工程库点卡片导入，
 //   只要 clips[] 里缺 pitch，渲染就在 renderTimeline 里抛未捕获异常
 //   （`c.pitch.toFixed(2)`），**时间轴画到一半就断**（4 个片段只画出 1 个），
@@ -969,7 +993,7 @@ function exportAnimationSoundEffects(doc, opts) {
 //
 // 为什么在**导入这一处**统一补齐，而不是在每个读取点各写一个 || 默认值：
 //   片段的 pitch / volume / kind 会被渲染、播放、校验、四份导出各读一次，
-//   逐个加兜底总有漏网的（本卡就是漏在渲染角标上）。这里补齐一次，
+//   逐个加兜底总有漏网的（这里就是漏在渲染角标上）。这里补齐一次，
 //   下游所有消费者拿到的都是**和 makeClip 同形状**的片段 —— 与「老工程缺
 //   srcDurMs」既有的兜底思路一致，只是从单字段扩到整类字段。
 //
@@ -1043,7 +1067,7 @@ function normalizeClipCompat(raw, opts) {
   const vol = numOr(c.volume, NaN);
   c.volume = Number.isFinite(vol) ? Math.max(0, vol) : 1.0;
 
-  // 「循环播放 / 循环区间终点」已在卡 t_6b5016ec 里整体移除：老工程里夹带的这两个字段
+  // 「循环播放 / 循环区间终点」已在里整体移除：老工程里夹带的这两个字段
   // 按**废弃字段**处理 —— 从对象上删掉（不能留着，否则保存 / 导出会把它们原样写回去，
   // 变成「界面上没有、文件里还有」的半截状态）。除此之外一个字段都不动：
   // 第三方工具写进来的其它键照旧原样留着（与 config / visual 的处理一致）。
@@ -1053,6 +1077,10 @@ function normalizeClipCompat(raw, opts) {
   c.fadeInMs = Math.round(nonNegNum(c.fadeInMs, 0));
   c.fadeOutMs = Math.round(nonNegNum(c.fadeOutMs, 0));
   c.fadePreset = strOr(c.fadePreset, 'none');
+  // 老工程里可能已经躺着一组「超出条长」的淡化值（旧版本让时长变小却没收短
+  // 淡化留下的现场）。读进来时按同一条 normalizeFades 收一次：合法的值（和 <= 条长）原样
+  // 不动，只有真的超了才收 —— 不会把合法的 800+200 于 1000ms 改成别的数。
+  normalizeFades(c);
 
   // 变体：lockedVariant 是「变体下标」（数字）。老工程里也可能存文件名 / 数字串 ——
   // 事件层的 lockedVariantIndex 自己会 Number() 并夹回合法范围（那条注释里明说了
@@ -1090,6 +1118,10 @@ function normalizeImportedDoc(doc) {
     gridMode: (cfg.gridMode === 'beat' || cfg.gridMode === 'ms') ? cfg.gridMode : D.gridMode,
     snapToGrid: (cfg.snapToGrid == null) ? D.snapToGrid : !!cfg.snapToGrid,
     totalMs: (numOr(cfg.totalMs, NaN) > 0) ? Math.round(numOr(cfg.totalMs, NaN)) : D.totalMs,
+    // 注意：这里**不夹上限**。打开一个总长大于 MAX_TOTAL_MS 的外部工程时，
+    // 原值必须原样保留（保存也照写），不能静默改成 3600000 冒充「恢复成功」——
+    // 那等于偷偷改用户数据。超上限的绘制由 renderTimeline 的预算闸挡住，
+    // 「这个长度超出可编辑上限」由 app.js 打开工程时在状态栏如实说明。
     bpm: Math.max(0, numOr(cfg.bpm, NaN) || 0),                    // 0 = 未设置，合法
     beatsPerBar: (numOr(cfg.beatsPerBar, NaN) > 0) ? Math.round(numOr(cfg.beatsPerBar, NaN)) : D.beatsPerBar,
   };
@@ -1154,6 +1186,8 @@ function exportTimelineJson(doc) {
 // Export to global for renderer (no module system in plain script)
 window.MCS = {
   DEFAULT_CONFIG,
+  // 总长硬上限（ms）：输入框拒绝超上限，导入超限值原样保留、绘制另设预算闸
+  MAX_TOTAL_MS,
   makeClip,
   makeTrack,
   makeDocument,
@@ -1168,7 +1202,7 @@ window.MCS = {
   exportSoundDefinitions,
   exportAnimationSoundEffects,
   exportTimelineJson,
-  // 片段几何：条长 ↔ 倍速 / 非破坏性裁剪 / 淡入淡出（卡 t_47b9fab2）
+  // 片段几何：条长 ↔ 倍速 / 非破坏性裁剪 / 淡入淡出
   MIN_DURATION_MS,
   MIN_RATE,
   MAX_RATE,
@@ -1186,7 +1220,7 @@ window.MCS = {
   fadePresetById,
   applyFadePreset,
   matchFadePreset,
-  // 导入容错：外部工程（手改 / 第三方生成）缺字段时补齐（卡 t_59ec2202）
+  // 导入容错：外部工程（手改 / 第三方生成）缺字段时补齐
   normalizeImportedDoc,
 };
 

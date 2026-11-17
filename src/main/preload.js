@@ -20,20 +20,20 @@ contextBridge.exposeInMainWorld('mcs', {
   onSaveShortcut: (cb) => ipcRenderer.on('save-shortcut', (_e, payload) => cb(payload)),
   loadVanillaLibrary: () => ipcRenderer.invoke('load-vanilla-library'),
   loadVanillaDescriptions: () => ipcRenderer.invoke('load-vanilla-descriptions'),
-  // 工程库 / 工程总览（卡 t_fa17801d）
+  // 工程库 / 工程总览
   //   实现见 src/main/project-ipc.js + src/main/project-library.js
   listProjects: () => ipcRenderer.invoke('list-projects'),
   pickProjectFile: () => ipcRenderer.invoke('pick-project-file'),
   recordProject: (payload) => ipcRenderer.invoke('record-project', payload),
-  // 存入工程库前先问一次「是不是要覆盖同名工程」（卡 t_5a1c18be）
+  // 存入工程库前先问一次「是不是要覆盖同名工程」
   resolveLibrarySaveName: (payload) => ipcRenderer.invoke('resolve-library-save-name', payload),
   saveProjectToLibrary: (payload) => ipcRenderer.invoke('save-project-to-library', payload),
   openProjectsFolder: () => ipcRenderer.invoke('open-projects-folder'),
   // 内置离线使用教程窗口（src/renderer/help.html）+ 作者外链（走系统默认浏览器）
-  // 实现见 src/main/help.js（卡 t_7ee2bf5b）
+  // 实现见 src/main/help.js
   openHelp: () => ipcRenderer.invoke('open-help'),
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
-  // 导出系统信息（卡 t_20c2e144）：系统 / 显卡 / 屏幕 / 库规模 + 首次加载耗时 → 用户选的 txt。
+  // 导出系统信息：系统 / 显卡 / 屏幕 / 库规模 + 首次加载耗时 → 用户选的 txt。
   // 实现见 src/main/sysinfo.js。payload 只带「只有渲染进程知道」的部分（库规模与耗时）。
   exportSystemInfo: (payload) => ipcRenderer.invoke('export-system-info', payload),
   // 同一条生成逻辑，但不弹框、不写盘 —— 自动化取证与 QA 复核对齐用。

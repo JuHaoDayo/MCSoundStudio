@@ -1,10 +1,10 @@
 /**
- * library-groups.js — 音效库的「子类」分组规则（卡 t_3623451f）
+ * library-groups.js — 音效库的「子类」分组规则
  *
  * 库里一千多个原版事件按一级分类（方块 / 友好生物 / …）分完之后，方块、玩家这两类**大部分
- * 没有二级分组**，用户只能一行行翻（P0 审计卡 t_494d72c9 实测：方块桶里有两百多条
+ * 没有二级分组**，用户只能一行行翻（P0 审计实测：方块桶里有两百多条
  * `themeOf()` 返回 null）。各分类的条数以 sounds/vanilla/vanilla-audit.json 为准（会随库
- * 重建变动，卡 t_706f52cd 不再在这里写死条数）。这里补的就是这层，规则全部取自
+ * 重建变动，不再在这里写死条数）。这里补的就是这层，规则全部取自
  * **事件自身的 ID**，不手写事件清单：
  *
  *   1) 物品使用族（P0 卡的 `categoryAudit.plan.itemUse`）—— 官方 sound_definitions
@@ -30,7 +30,7 @@ const USE_GROUP = { key: 'use', label: '物品使用' };
 
 /**
  * 物品使用族 → 事件 ID 前缀规则。
- * 依据 P0 卡 `qa-review-t_494d72c9/vanilla-audit.json` 的 `categoryAudit.plan.itemUse`
+ * 依据原版库审计结果的 `categoryAudit.plan.itemUse`
  * （每族的 inLibrary 事件都落在这条前缀规则里，scripts/verify-library-groups.js 会核对）。
  */
 const ITEM_USE_RULES = [
@@ -47,7 +47,7 @@ const ITEM_USE_RULES = [
   { family: 'firecharge', match: /^item\.firecharge\./ },
   { family: 'book', match: /^item\.book\./ },
   // P0 卡的 bucket 族就是「桶」：炼药锅那 4 条（inLibrary）+ 官方 defs 里的
-  // bucket.fill_* / bucket.empty_* 8 条（那 8 条在卡 t_41c27a7a 重建库后已经接上音频，
+  // bucket.fill_* / bucket.empty_* 8 条（那 8 条在重建库后已经接上音频，
   // 所以这里前缀一起收，免得同一族被拆成两处）
   { family: 'bucket', match: /^(cauldron\.(fill|take)|bucket\.(fill|empty))/ },
   { family: 'bottle', match: /^bottle\./ },
@@ -137,7 +137,7 @@ const DOMAIN_LABEL = {
   sign: '告示牌',
   mob: '生物',
   raid: '袭击 / 劫掠',
-  // 下面这些域名在卡 t_41c27a7a 重建库（+33 条音频）之后才出现：
+  // 下面这些域名在重建库（+33 条音频）之后才出现：
   // 有族的（firework/bucket/crossbow…）平时会被「物品使用」挪走，这里留着是为了
   // 「万一有同域但不属于任何族的事件」也能有中文组名，不会冒出英文头
   ui: '界面交互',
@@ -197,7 +197,7 @@ function pathOf(event, category) {
       if (t) return [{ key: t, label: (EV.themeLabelOf && EV.themeLabelOf(t)) || t }];
 
       // themeOf 认不出来时以前的写法就是 return []（条目平铺在分类根下）。
-      // 卡 t_4e96920b 补两条兜底，让「生物」桶里也不再有没有子类的条目：
+      // 补两条兜底，让「生物」桶里也不再有没有子类的条目：
       //   1) 基岩版旧事件 ID entity.<生物>.<动作>（entity.wither_skeleton.ambient /
       //      entity.fox.teleport / entity.zombie.converted_to_drowned）——
       //      生物段就是 mob.<生物>.* 的那个生物，用同一套词典翻译、同一个 key，

@@ -29,12 +29,16 @@ const exportModSDKPython = MCS.exportModSDKPython;
 const exportSoundDefinitions = MCS.exportSoundDefinitions;
 const exportAnimationSoundEffects = MCS.exportAnimationSoundEffects;
 const exportTimelineJson = MCS.exportTimelineJson;
-// 片段几何：条长 ↔ 倍速 / 非破坏性裁剪 / 淡入淡出（卡 t_47b9fab2）
+// 片段几何：条长 ↔ 倍速 / 非破坏性裁剪 / 淡入淡出
 // 这几个 helper 住在 timeline.js 里，拖拽、属性面板、播放器三处共用同一套，
 // 免得「拖出来的值」和「播出来的值」算得不一样。
 const MIN_DURATION_MS = MCS.MIN_DURATION_MS;
 // 片段左端多宽算「头部裁剪区」（Alt + 在这一带按下 = 裁剪头；不按 Alt = 移动片段）
 const TRIM_HEAD_ZONE_PX = 8;
+// 片段内音量角标「vol 0.90」写全所需要的最小片段像素宽。
+// 实测：10px 字号下整串 44.5px，加左右内边距/边框后约需 58px 才不会在 overflow:hidden
+// 的片段条里被裁掉；更宽的片段照旧写完整前缀，窄片段只留数字。
+const VOL_BADGE_FULL_TEXT_MIN_PX = 58;
 const MIN_RATE = MCS.MIN_RATE;
 const MAX_RATE = MCS.MAX_RATE;
 const FADE_PRESETS = MCS.FADE_PRESETS;
@@ -51,7 +55,7 @@ const normalizeFades = MCS.normalizeFades;
 const fadePresetById = MCS.fadePresetById;
 const applyFadePreset = MCS.applyFadePreset;
 const matchFadePreset = MCS.matchFadePreset;
-// 导入容错：把外部工程（手改 / 第三方生成 / 旧版本）缺的字段补齐（卡 t_59ec2202）
+// 导入容错：把外部工程（手改 / 第三方生成 / 旧版本）缺的字段补齐
 const normalizeImportedDoc = MCS.normalizeImportedDoc;
 
 const parseAnimationJson = MCS_PARSERS.parseAnimationJson;
@@ -63,6 +67,16 @@ const checkTextures = MCS_PARSERS.checkTextures;
 // ---------------------------------------------------------------------------
 // 全局状态
 // ---------------------------------------------------------------------------
+// 时间轴缩放的真实上下限（/ P1）。
+// 以前三处各写一份：滑杆 0.05~2、滚轮 0.02~4、适合窗口 0.005~2 —— 于是「适合窗口」
+// 算出的 0.005 被滑杆的 min=0.05 顶回去，滑杆/标签/状态栏各说一套（复现）。
+// 现在只有这一份：滑杆的 min/max/step 也由它写进 DOM（step=any：不再按 0.01 量化，
+// 0.0588 就是 0.0588，不会显示成 0.06）。
+// 放在 STATE 旁边而不是 zoomToFit 旁边：updateRulerHud() 也用这两个常量，
+// 而它可能在模块求值更早的位置被调用，const 的 TDZ 会直接抛错。
+const ZOOM_MIN = 0.005;
+const ZOOM_MAX = 4;
+
 const STATE = {
   doc: makeDocument({ name: '未命名时序' }),
   library: [],              // [{name, absPath, relPath, ext, size, group}]
@@ -76,6 +90,7 @@ const STATE = {
   favorites: new Set(),     // 收藏的音效 key
   dirty: false,             // 有未保存的改动（显示在窗口标题）
   assetIssues: [],          // 模型/贴图/动画导入过程中的问题（revalidate 会合并）
+  importWarnings: [],       // 导入时留下的单条提示（空模型承诺「校验页留一条」，revalidate 会合并）
   gifAnim: null,            // GIF 解析出的帧（用于暂停 / seek）
   gifFrames: [],
   gifPlayer: null,          // GIF 播放控制器
@@ -93,7 +108,7 @@ const STATE = {
   openGroups: new Set(['cat:block']),   // 已展开的分组（折叠状态持久化）
   selectedTrack: null,      // 当前选中的轨道名（视觉高亮 + 新建片段默认落这里）
   // -------------------------------------------------------------------------
-  // 预览画布里「现在显示的是什么」（卡 t_fa17801d）
+  // 预览画布里「现在显示的是什么」
   //   'none' | 'gif' | 'video' | 'image' | 'model'
   // 模型导入后画的就是同一个 #previewCanvas；同时存在模型与 GIF/视频时，
   // 用预览区那枚「看模型 / 看 GIF」按钮切换，两边都不丢（GIF 行为不变）。
@@ -102,18 +117,18 @@ const STATE = {
   gifRenderer: null,        // GIF 渲染器（切回 GIF 时要按 GIF 尺寸重画一次）
   videoMs: 0,
   // -------------------------------------------------------------------------
-  // 工作页的两个步骤（卡 t_c54d031b）
+  // 工作页的两个步骤
   //   'adjust' = ① 模型/GIF 调整（摆角度 / 选动画 / 放 GIF）
   //   'sound'  = ② 音效（时间轴 + 音效库 + 片段属性）—— 默认停在这里，与改动前一致
   // 两个页面画的是**同一块画布**、读的是**同一份状态**（STATE.doc.visual），
   // 切页只换右栏控件，不动播放头 / 播放状态 / 总长 / 选中片段 / 撤销栈。
   // -------------------------------------------------------------------------
-  // 动画两档（卡 t_96cd9241）：每档各自记着「上次选的那条」（运行期记忆，不写工程文件；
+  // 动画两档：每档各自记着「上次选的那条」（运行期记忆，不写工程文件；
   // 文件里只有当前档的 animName / animFile / animMode）。key = `来源:动画名`。
   animSel: { keyframe: null, molang: null },
   step: 'sound',
   // ---------------------------------------------------------------------------
-  // 「导出系统信息」（卡 t_20c2e144）要的两个实测值 —— 只有渲染进程知道：
+  // 「导出系统信息」要的两个实测值 —— 只有渲染进程知道：
   //   libraryLoadMs：本次会话**第一次**成功加载原版库的耗时（ms），只记第一次；
   //   libraryMeta  ：那一次加载到的真实规模（事件数 / 变体数 / 带中文描述数）。
   // 都保持 null 表示「这次会话还没加载过库」，导出的 txt 里会如实写「未加载」。
@@ -220,7 +235,7 @@ function updateVisualRemovalButtons() {
     media.textContent = mediaKind === 'video' ? '移除视频' : (mediaKind === 'image' ? '移除图片' : '移除 GIF');
   }
   if (model) model.style.display = v.modelPath ? '' : 'none';
-  // 调整页的素材槽跟着同一份状态走（卡 t_c54d031b）：删掉素材后槽里不该还留着名字。
+  // 调整页的素材槽跟着同一份状态走：删掉素材后槽里不该还留着名字。
   // 挂在这里是因为所有「素材变了」的路径最后都会走到 updateVisualRemovalButtons()。
   updateVisualSlots();
 }
@@ -273,6 +288,9 @@ function removeVisualAsset(slot, ask) {
     clearMediaRuntime();
     v.mediaPath = null;
     v.dataUrl = null;
+    // 「参考图打不开」这条问题记录随素材一起失效：
+    // 用户已经主动移除这张图了，面板上不该还留着一条无从处理的告警。
+    STATE.assetIssues = STATE.assetIssues.filter((i) => !i.fromVisual);
     if (v.modelPath) {
       v.kind = 'model';
       v.path = v.modelPath;
@@ -310,7 +328,7 @@ function removeVisualAsset(slot, ask) {
 }
 
 // ---------------------------------------------------------------------------
-// 工作页的两个步骤（卡 t_c54d031b）：① 模型/GIF 调整 ↔ ② 音效
+// 工作页的两个步骤：① 模型/GIF 调整 ↔ ② 音效
 //
 // 铁律（规格 §1.3）：
 //   · 两个页面画的是**同一块画布**（#previewCanvas + model-view.js），不是两套渲染；
@@ -358,7 +376,7 @@ function viewFromVisual(v) {
     zoom: clampNum(numOrDef(src.zoom, VIEW_DEFAULT.zoom), VIEW_ZOOM_MIN, VIEW_ZOOM_MAX),
     panX: clampNum(numOrDef(pan.x, VIEW_DEFAULT.panX), -4000, 4000),
     panY: clampNum(numOrDef(pan.y, VIEW_DEFAULT.panY), -4000, 4000),
-    // 动画两档 / 播放方式：界面在卡 t_96cd9241，字段先按规格 §4 落位；
+    // 动画两档 / 播放方式：界面，字段先按规格 §4 落位；
     // 缺省值就是现在的行为（关键帧动画 / 跟随播放头），所以老工程不会因此变样。
     animMode: src.animMode === 'molang' ? 'molang' : 'keyframe',
     animName: (typeof src.animName === 'string' && src.animName) ? src.animName : null,
@@ -448,7 +466,7 @@ function landOnAdjust(opts) {
   // keepMode：只把「当前页」挪到调整页，**不碰**画布上正在显示的东西。
   // 导入动作自己知道该显示什么（导入模型 → 模型；导入 GIF/视频/图片 → 那件素材），
   // 这里要是顺手 setVisualMode('model')，就会出现「导入一张图片，看到的却是模型」
-  // （卡 t_fad69070 明确修过「两个槽互不顶替」，不能在这里退回去）。
+  // （明确修过「两个槽互不顶替」，不能在这里退回去）。
   return setStep('adjust', { quiet: true, keepMode: true });
 }
 
@@ -553,7 +571,7 @@ function updateVisualSlots() {
   if (btnRmMedia) btnRmMedia.style.display = hasMedia ? '' : 'none';
   const btnImpMedia = $('btnSlotImportMedia');
   if (btnImpMedia) btnImpMedia.textContent = hasMedia ? '替换' : '导入';
-  // 动画一栏的标题 / 空状态跟着素材走（卡 t_96cd9241）：删掉模型后这里不该还写着
+  // 动画一栏的标题 / 空状态跟着素材走：删掉模型后这里不该还写着
   // 「这个模型没有可播的动画」。所有「素材变了」的路径最后都会走到这里。
   renderAnimPanel();
 }
@@ -571,9 +589,17 @@ function setStep(step, opts) {
   if (document.body) document.body.dataset.page = next;
 
   const ba = $('btnStepAdjust');
-  if (ba) { ba.classList.toggle('active', next === 'adjust'); ba.setAttribute('aria-selected', next === 'adjust' ? 'true' : 'false'); }
+  if (ba) {
+    ba.classList.toggle('active', next === 'adjust');
+    ba.setAttribute('aria-selected', next === 'adjust' ? 'true' : 'false');
+    ba.tabIndex = next === 'adjust' ? 0 : -1;      // roving tabindex（设计状态规范 §四）
+  }
   const bs = $('btnStepSound');
-  if (bs) { bs.classList.toggle('active', next === 'sound'); bs.setAttribute('aria-selected', next === 'sound' ? 'true' : 'false'); }
+  if (bs) {
+    bs.classList.toggle('active', next === 'sound');
+    bs.setAttribute('aria-selected', next === 'sound' ? 'true' : 'false');
+    bs.tabIndex = next === 'sound' ? 0 : -1;
+  }
   const goAdj = $('btnGoAdjust');
   if (goAdj) goAdj.style.display = next === 'sound' ? '' : 'none';   // 音效页留一条回调整页的近路
 
@@ -593,7 +619,7 @@ function setStep(step, opts) {
   }
   updateVisualSwitchButton();
   updateVisualSlots();
-  // 动画一栏（卡 t_96cd9241）：列表本身与页无关，但「独立预览」的循环只在调整页跑，
+  // 动画一栏：列表本身与页无关，但「独立预览」的循环只在调整页跑，
   // 所以切页时按当前页起停一次（不动播放头 / 不动传输状态）。
   renderAnimPanel();
   if (next === 'adjust') applyPlayMode(); else stopAnimPreview();
@@ -607,8 +633,68 @@ function setStep(step, opts) {
 }
 
 /**
+ * roving tabindex + 方向键导航（界面设计规范 §四；实测）。
+ *
+ * 规范要求：「选中：绿色底并 aria-selected，步骤 / 右侧 tabs 各自独立；实现时要补
+ * 完整 roving-tabindex 与方向键导航」。生产实现以前只做了 aria-selected 和 click，
+ * 两个步骤按钮 tabindex 都是 0、按 Right 焦点不动，而全局方向键还会顺手把播放头
+ * 挪一格 —— 键盘用户「按方向键切页」变成「偷挪播放头」。
+ *
+ * 这里统一给每个 tablist 挂一套：只有当前选中的 tab 在 Tab 顺序里（tabIndex=0），
+ * 方向键在组内循环移动并激活（automatic activation），Home/End 到首/末。
+ * 事件在 tablist 上截住（preventDefault + stopPropagation），不再漏给全局快捷键。
+ */
+function setupRovingTablist(bar) {
+  if (!bar || bar.dataset.rovingWired === '1') return 'already';
+  const tabs = Array.from(bar.querySelectorAll('[role="tab"]'));
+  if (tabs.length < 2) return 'skip';
+  bar.dataset.rovingWired = '1';
+
+  const sync = () => {
+    const sel = tabs.find((t) => t.getAttribute('aria-selected') === 'true') || tabs[0];
+    tabs.forEach((t) => { t.tabIndex = (t === sel) ? 0 : -1; });
+  };
+  sync();
+
+  bar.addEventListener('keydown', (e) => {
+    if (e.altKey || e.ctrlKey || e.metaKey) return;
+    const cur = tabs.indexOf(document.activeElement);
+    if (cur < 0) return;
+    let next = -1;
+    if (e.key === 'ArrowRight') next = (cur + 1) % tabs.length;
+    else if (e.key === 'ArrowLeft') next = (cur - 1 + tabs.length) % tabs.length;
+    else if (e.key === 'Home') next = 0;
+    else if (e.key === 'End') next = tabs.length - 1;
+    if (next < 0 || next === cur) return;
+    e.preventDefault();
+    e.stopPropagation();     // 别让 window 上的「方向键 = 挪播放头 / 片段」再执行一次
+    const el = tabs[next];
+    el.focus();
+    if (el.getAttribute('aria-selected') !== 'true') el.click();
+    sync();
+  });
+
+  // 选中态由程序改（鼠标点 / setStep / 快捷键）时，roving 也跟着走
+  if (typeof MutationObserver !== 'undefined') {
+    const mo = new MutationObserver(sync);
+    tabs.forEach((t) => mo.observe(t, { attributes: true, attributeFilter: ['aria-selected'] }));
+  }
+  return 'wired';
+}
+
+/** 给页面上三处 tablist 全部接线（步骤条 / 右侧属性栏 / 调整页动画模式）。 */
+function setupRovingTablists() {
+  const out = {
+    step: setupRovingTablist($('stepBar')),
+    panel: setupRovingTablist(document.querySelector('#rightPanel .tabs')),
+    anim: setupRovingTablist($('animModeBar')),
+  };
+  return out;
+}
+
+/**
  * 调整页的全部交互接线（幂等）。
- * 为什么不塞进 boot()：boot 是每张卡都会动的地方（本项目同工作区并行改 app.js），
+ * 为什么不塞进 boot()：boot 是每次改动都可能碰到的地方（本项目同工作区并行改 app.js），
  * 接线被别人的整段覆盖过一次 —— 挂在自己的 DOMContentLoaded 上与 boot 平级更稳。
  */
 function setupStepSwitch() {
@@ -622,7 +708,7 @@ function setupStepSwitch() {
   // 素材槽的「导入」按钮 = 顶栏同款选择器（规格 §5.1：同一个入口，不做两套）
   on('btnSlotImportModel', () => { const b = $('btnImportBB'); if (b) b.click(); });
   on('btnSlotImportMedia', () => { const b = $('btnImportGif'); if (b) b.click(); });
-  // 「移除」复用 B1 的实现（卡 t_fad69070）—— 确认框 / 撤销 / 标脏都是那一套，不做第二套
+  // 「移除」复用 B1 的实现—— 确认框 / 撤销 / 标脏都是那一套，不做第二套
   on('btnSlotRemoveModel', () => removeVisualAsset('model'));
   on('btnSlotRemoveMedia', () => removeVisualAsset('media'));
   on('btnResetAngle', () => resetView(true));
@@ -693,8 +779,9 @@ function setupPreviewReflow() {
 
 /**
  * 画布拖动 = 转模型 / Shift+拖动 = 挪位置；滚轮 = 缩放（只在调整页生效）。
- * 方向必须「顺着手」：往右拖 → 看到的那一侧往右走（= 模型看起来向左转，Y 变小）。
- * 推导：yaw 变大 = 相机绕到右边 → 正面往左滑；所以「正面往右滑」对应 yaw 变小。
+ * 方向必须「顺着手」：往右拖 → 看到的那一侧往右走（= 模型看起来向左转，Y 变大）。
+ * 推导（镜像修正后）：屏幕 x = -相机空间 x，所以 yaw 变大 = 正面往右滑；
+ * 「正面往右滑」对应 yaw 变大。修正前是反的（那时画面整体左右镜像过）。
  * 俯仰同理：往下拖 = 看到更多顶面 = 从上往下看 = X 变小（与默认值 -20 的方向一致）。
  */
 function bindAdjustCanvas() {
@@ -722,7 +809,7 @@ function bindAdjustCanvas() {
       applyView({ panX: clampNum(v.panX + dx, -4000, 4000), panY: clampNum(v.panY + dy, -4000, 4000) });
     } else {
       applyView({
-        y: wrapAngle(v.y - dx * DRAG_DEG_PER_PX),
+        y: wrapAngle(v.y + dx * DRAG_DEG_PER_PX),
         x: clampNum(v.x - dy * DRAG_DEG_PER_PX, ANGLE_MIN, ANGLE_MAX),
       });
     }
@@ -754,9 +841,9 @@ function bindAdjustCanvas() {
 }
 
 // ---------------------------------------------------------------------------
-// 调整页「动画」一栏（卡 t_96cd9241）：两档列表 + 选中即在画布上播
+// 调整页「动画」一栏：两档列表 + 选中即在画布上播
 //
-// 口径（A3 规格 §3 + mcs-qa 卡 t_9fd9ce60 的四条硬决定）：
+// 口径（界面规格 §3 + 实测的四条硬决定）：
 //   · 两档按「这条动画里有没有表达式」分堆 —— 关键帧动画 = 全部关键帧都是数值的动画；
 //     Molang 语言动画 = 含表达式的动画。**本期不求值**：画布上按「保持前一帧」播，
 //     列表里逐处标注哪一处不会动、按什么处理（不许静默丢帧，见 parsers.readKeyTriple）。
@@ -857,8 +944,16 @@ function renderAnimPanel() {
   const selKey = MCS_MODELPREVIEW.selectedKey;
 
   const bk = $('btnAnimModeKey'), bm = $('btnAnimModeMolang');
-  if (bk) { bk.classList.toggle('active', tier === 'keyframe'); bk.setAttribute('aria-selected', tier === 'keyframe' ? 'true' : 'false'); }
-  if (bm) { bm.classList.toggle('active', tier === 'molang'); bm.setAttribute('aria-selected', tier === 'molang' ? 'true' : 'false'); }
+  if (bk) {
+    bk.classList.toggle('active', tier === 'keyframe');
+    bk.setAttribute('aria-selected', tier === 'keyframe' ? 'true' : 'false');
+    bk.tabIndex = tier === 'keyframe' ? 0 : -1;     // roving tabindex
+  }
+  if (bm) {
+    bm.classList.toggle('active', tier === 'molang');
+    bm.setAttribute('aria-selected', tier === 'molang' ? 'true' : 'false');
+    bm.tabIndex = tier === 'molang' ? 0 : -1;
+  }
 
   const hint = $('animModeHint');
   if (hint) {
@@ -1124,10 +1219,10 @@ function setupAnimPanel() {
   return 'wired';
 }
 
-// 撤销 / 重做：走仓库已有的通用撤销栈（卡 t_6b99a1fd，见下面「通用撤销 / 重做」一节）。
+// 撤销 / 重做：走仓库已有的通用撤销栈（见下面「通用撤销 / 重做」一节）。
 // 新动作只要照旧调 markDirty(kind)，就自动进栈；连续手势用
 // beginUndoBatch(kind) / endUndoBatch() 包起来，整段只占一步。
-// 卡 t_47b9fab2 新增的动作因此分别用 'resize'（改长度＝等比变速）、
+// 新增的动作因此分别用 'resize'（改长度＝等比变速）、
 // 'trim'（Alt 非破坏性裁剪）、'param'（属性面板里的淡入淡出 / 裁剪起止）。
 
 // ---------------------------------------------------------------------------
@@ -1160,7 +1255,7 @@ function fmtTime(ms) {
   return `${String(m).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}.${String(t % 1000).padStart(3, '0')}`;
 }
 // ---------------------------------------------------------------------------
-// 状态栏文案的生命周期（卡 t_7cdeea89）
+// 状态栏文案的生命周期
 //   左侧 =「现在发生了什么」；右侧 = 辅助信息（文件路径、来源，或一次性提示）。
 //   一次性提示（用 statusHint 写）只在那一瞬间成立，状态一过就必须消失，
 //   否则同一行左右两句会互相矛盾。本轮修的两条正是这个毛病：
@@ -1172,15 +1267,20 @@ const ENDED_STATUS_MSG = '播放结束，已停在末尾';
 let statusRightIsHint = false;    // 右侧当前挂的是不是一次性提示
 let statusShowsEnded = false;     // 左侧当前挂的是不是上面那句
 let statusShowsPos = false;       // 左侧当前挂的是不是「已定位到 X.XXs」
+// 左侧当前挂的是不是「缩放 X px/ms · 一屏约 Ns」这句几何读数。
+// 它的 N 来自 scrollArea.clientWidth ÷ zoom，窗口/抓手一改宽度就过期；
+// 只要它还挂在状态栏上，宽度一变就得原句重写（不是换一句新话）。
+let statusShowsZoom = false;
 
 /**
  * 写状态栏。right 省略 = 右侧保持原样（路径这类上下文信息要留住）；
  * 但如果右侧挂的是一次性提示，这里会把它清掉 —— 提示的寿命只到下一次状态栏更新。
  */
 function status(msg, right) {
-  $('statusMsg').textContent = msg;
+  setStatusMsgPlain(msg);
   statusShowsEnded = msg === ENDED_STATUS_MSG;
   statusShowsPos = false;
+  statusShowsZoom = false;        // 换成了别的文案：缩放那门「还会自己变」的身份就作废
   if (right !== undefined) {
     setStatusRight(right);         // 常规写法：右侧是「上下文信息」，不算一次性提示
   } else if (statusRightIsHint) {
@@ -1191,7 +1291,12 @@ function status(msg, right) {
 /** 写状态栏右侧；所有非提示文案都必须经这里，避免旧的提示标记误删新统计。 */
 function setStatusRight(text, isHint = false) {
   statusRightIsHint = isHint;
-  $('statusRight').textContent = text;
+  const el = $('statusRight');
+  el.textContent = text;
+  // 右侧信息同样是一行限宽（max-width:46vw）+ 省略号，实测 1546 宽下
+  // scrollWidth 401 > clientWidth 318，尾部被截而没有任何全文出口。与左侧同法补 title，
+  // 不改排版、不改 #statusRight 的既有清理路径（clearStatusHint 仍只清空文本）。
+  if (text) el.title = text; else el.removeAttribute('title');
 }
 
 /**
@@ -1218,22 +1323,177 @@ function clearStatusHint() {
 }
 
 // ---------------------------------------------------------------------------
-// 试听失败反馈（卡 t_8c74ddef 第 1 条）
+// 状态栏左侧的两段排版：可缩路径 + 不缩关键提示
+//
+// 复现（默认 1560×940 窗口）：工程路径约 130 字符时，
+// 整条「已打开工程：路径　· 提示：工程总长 1e+21ms 超过本版本可编辑上限 3600000ms，
+// 原值保留（保存照写），编辑框里只能改成上限以内的数」塞在一个 span 里，
+// 浏览器按单行省略号裁切 → 截图里只剩「已打开工程：C:\Users\…」，
+// 超限原因与「原值保留」全在省略区，用户根本看不到限制，更容易以为软件偷改了值。
+//
+// 所以这里只给「打开工程」这一种消息加结构，不重做整个状态栏：
+//   · 路径段：flex 可缩、超长走 …，title 里留完整路径；
+//   · 提示段：flex 不缩，永远完整可见；带完整说明的提示做成真实 <button>，
+//     Tab 到得了、Enter / 空格能开、关窗后焦点回到按钮，点开是完整说明弹窗。
+// ---------------------------------------------------------------------------
+
+/** 状态栏左侧写纯文本：清掉拆段结构，避免残留上一次的路径段 / 按钮 */
+function setStatusMsgPlain(msg) {
+  const el = $('statusMsg');
+  if (!el) return;
+  el.textContent = msg;
+  el.classList.remove('status-split');
+  // 26px 高的状态栏只能显示一行，长句会被省略号截掉（实测 1086 宽下
+  // 「总长 360.00s 铺不满一屏…整段约 2.5 屏」59 个字塞进 205px）。以前被截掉的尾部
+  // 没有任何出口，用户只能猜。这里把同一句放进 title：悬停即读全文，视觉与布局不变。
+  el.removeAttribute('title');
+  if (msg) el.title = msg;
+}
+
+/**
+ * 状态栏左侧拆段排版：一段可缩路径 + 若干不缩提示。
+ * @param {string} pathText 如「已打开工程：C:\…\x.timeline.json」（会被省略号裁短）
+ * @param {Array<{text:string, prefix?:string, detail?:{title:string, body:string, label?:string}}>} hints
+ * @param {string} [right] 右侧文案（与 status(msg, right) 同义）
+ */
+function statusSplitMessage(pathText, hints, right) {
+  const el = $('statusMsg');
+  if (!el) return;
+  el.textContent = '';
+  el.classList.add('status-split');
+  const pathSpan = document.createElement('span');
+  pathSpan.className = 'status-path';
+  pathSpan.textContent = pathText;
+  pathSpan.title = pathText;                    // 路径被 … 裁掉时，悬停能看到全部
+  el.appendChild(pathSpan);
+  let full = pathText;
+  const detailBodies = [];
+  const NL = String.fromCharCode(10);   // 换行符：避免和源码里的转义写法打架
+  (hints || []).forEach((h) => {
+    if (!h || !h.text) return;
+    let node;
+    if (h.detail) {
+      node = document.createElement('button');
+      node.type = 'button';
+      node.className = 'status-limit';
+      node.setAttribute('aria-haspopup', 'dialog');
+      node.setAttribute('aria-controls', 'modal');
+      node.setAttribute('aria-label', h.detail.label || (h.text + '；点击查看完整说明'));
+      node.addEventListener('click', () => openStatusDetailModal(node, h.detail.title, h.detail.body));
+      // 与 #btnAudioHelp 同一套：回车显式打开（自动化只发 keyDown/keyUp），
+      // 空格留给原生按钮激活，别被窗口级「空格 = 播放」抢走。
+      node.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.code === 'Enter') {
+          e.preventDefault();
+          e.stopPropagation();
+          if (!e.repeat) openStatusDetailModal(node, h.detail.title, h.detail.body);
+          return;
+        }
+        if (e.code === 'Space' || e.key === ' ') e.stopPropagation();
+      });
+      node.title = h.detail.title + NL + NL + h.detail.body;   // 悬停也能读到完整说明
+      detailBodies.push(h.detail.title + NL + NL + h.detail.body);
+    } else {
+      node = document.createElement('span');
+      node.className = 'status-warn-plain';
+      node.title = h.text;
+    }
+    if (node.tagName === 'BUTTON' && h.prefix) {
+      // 前缀单独成段：窄窗口下由 CSS 收起，关键原因（h.text）永远整句可见
+      const pre = document.createElement('span');
+      pre.className = 'limit-pre';
+      pre.textContent = h.prefix;
+      node.appendChild(pre);
+      node.appendChild(document.createTextNode(h.text));
+    } else {
+      node.textContent = h.text;
+    }
+    el.appendChild(node);
+    full += (h.prefix || '') + h.text;
+  });
+  el.title = full + (detailBodies.length ? NL + NL + detailBodies.join(NL + NL) : '');
+  statusShowsEnded = false;
+  statusShowsPos = false;
+  statusShowsZoom = false;
+  if (right !== undefined) setStatusRight(right);
+  else if (statusRightIsHint) setStatusRight('');
+}
+
+/** 打开状态栏提示的完整说明弹窗；关窗后焦点回到触发按钮（openModalPanel 负责记） */
+function openStatusDetailModal(opener, title, body) {
+  $('modalTitle').textContent = title;
+  $('modalBody').textContent = body;
+  modalContent = body;
+  modalName = 'project-total-limit.txt';
+  openModalPanel(opener);
+}
+
+/**
+ * 「工程总长超过本版本可编辑上限」的完整说明（状态栏只放一句短的，这里放全文）。
+ * 关键：说清楚「原值保留」是数据承诺，不是把上限值当成了真实总长。
+ */
+function totalOverLimitDetail(totalMs, filePath) {
+  return {
+    title: '工程总长超出本版本可编辑上限',
+    label: `工程总长 ${totalMs}ms 超过本版本可编辑上限 ${MAX_TOTAL_MS}ms，原值保留（保存照写）；点击查看完整说明`,
+    body: [
+      '工程文件：' + filePath,
+      '工程里写的总长：' + totalMs + 'ms',
+      '本版本可编辑上限：' + MAX_TOTAL_MS + 'ms（1 小时）',
+      '',
+      '本软件没有改这个值，也不会把它截短：',
+      '  · 工程总长按原值保留（保存照写），不会被悄悄改成 ' + MAX_TOTAL_MS + 'ms；',
+      '  · 打开后原值照样保留，Ctrl+S / 另存为时按原样写回文件；',
+      '  · 时间轴只按画得出来的范围铺刻度，画得出来的边界不会被当成你的真实总长，',
+      '    标尺右侧的长总 HUD 显示的是工程真实总长；',
+      '  · 顶栏「总长(ms)」编辑框只能改成 ' + MIN_TOTAL_MS + '～' + MAX_TOTAL_MS
+        + ' 以内的数，填更大的数会被拒绝并提示上限，不会写进工程文件。',
+      '',
+      '想把工程改回可编辑长度：在顶栏「总长(ms)」里填一个不超过 ' + MAX_TOTAL_MS + ' 的数再回车。',
+      '想保留原来的长度：什么都不用做，直接保存即可。',
+    ].join('\n'),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 试听失败反馈（第 1 条）
 //   AudioEngine.playOne 在读不到音频文件时只 console.warn 然后 return null（**不抛异常**），
 //   所以「await 完就写 试听：XXX」是说假话：包内音频被删、或解包目录被别的实例重新解包时，
 //   用户点 ▶ 一点声音都没有，状态栏却写着「试听：蜡烛燃烧」——比没有反馈更糟。
 //   以后所有试听入口都走 tryAudition()，返回 null 就写失败话术 + 给出「音频放哪」的引导。
 // ---------------------------------------------------------------------------
-/** 音频读不到时把状态栏做成可点的引导入口（点开「试听没有声音？」弹窗，里面有放音频的路径） */
-function setAudioHelpClickable(on) {
+/** 音频读不到时状态栏右侧出现的帮助入口文案（按钮的名称就是这句话） */
+const AUDIO_HELP_HINT = '点此查看怎么放音频';
+
+/**
+ * 音频缺失 / 试听失败时，把状态栏右侧的帮助入口显出来。
+ *
+ * 入口以前是把整个 #statusBar 做成 `onclick` 的 div ——
+ * 鼠标能点，但 Tab 到不了；弹窗关闭时 document.activeElement 是 BODY，
+ * 记不到「本次是谁触发的」，焦点就掉回整页开头（下一次 Tab 从页首重来）。
+ * 现在入口是 #btnAudioHelp 这个真实 <button>：可聚焦、有明确名称、
+ * Enter / 空格按原生按钮激活，弹窗关闭时把焦点还给它。
+ *
+ * @param {boolean} on        true = 显示入口；false = 收起（音频恢复后）
+ * @param {string}  [soundLabel] 哪个音效（放进 title，状态栏宽度有限不塞进按钮文字）
+ */
+function setAudioHelpClickable(on, soundLabel) {
   const bar = $('statusBar');
-  if (!bar) return;
+  const btn = $('btnAudioHelp');
+  if (!btn) return;
   if (on) {
-    bar.classList.add('warn-clickable');
-    bar.onclick = () => openAudioHelpModal();
+    // 按钮文字保持短句（状态栏在最小窗口只剩 ~200px 给右侧），音效名放 title。
+    btn.textContent = AUDIO_HELP_HINT;
+    btn.title = (soundLabel ? soundLabel + ' · ' : '') + AUDIO_HELP_HINT
+      + '（打开「试听没有声音？」说明）';
+    btn.hidden = false;
+    // 显示时回到正常 Tab 顺序（隐藏期是 tabindex=-1，不会被 Tab 撞到）
+    btn.removeAttribute('tabindex');
+    if (bar) bar.classList.add('warn-clickable');
   } else {
-    bar.classList.remove('warn-clickable');
-    bar.onclick = null;
+    btn.hidden = true;
+    btn.setAttribute('tabindex', '-1');
+    if (bar) bar.classList.remove('warn-clickable');
   }
 }
 
@@ -1251,14 +1511,13 @@ async function tryAudition(absPath, opts) {
 }
 
 /**
- * 试听失败（tryAudition 返回 null）时的状态栏：明确说没读到文件，并指向「音频放哪」的引导。
- * 右侧用 statusHint 写：它是「这一次失败」的一次性引导，下一次状态栏更新（例如恢复后又试听成功）
- * 必须跟着走，否则会留下「音频明明好了、右侧还写着点此查看怎么放音频」的过期文案。
+ * 试听失败（tryAudition 返回 null）时的状态栏：明确说没读到文件，并显示「音频放哪」的入口。
+ * 入口是状态栏右侧的真实按钮（setAudioHelpClickable），不占用右侧的一次性提示位；
+ * 试听成功或音频恢复后由 statusAuditionOk / loadVanillaLibrary 收起，避免过期引导一直挂着。
  */
 function statusAuditionFailed(label) {
-  statusHint('试听失败：没读到音频文件（可能被删了）',
-             (label ? label + ' · ' : '') + '点此查看怎么放音频');
-  setAudioHelpClickable(true);
+  status('试听失败：没读到音频文件（可能被删了）');
+  setAudioHelpClickable(true, label);
 }
 
 /** 试听成功：清掉上一次失败留下的可点告警（原版库整体缺失时保留 loadVanillaLibrary 的提示） */
@@ -1274,11 +1533,33 @@ function esc(s) {
 }
 /** 总长的硬下限：顶栏输入框的 min 属性（200ms） */
 const MIN_TOTAL_MS = 200;
+/**
+ * 总长的硬上限（ms）。
+ * 取值的理由与「为什么必须是有限值」写在 timeline.js 的 MAX_TOTAL_MS 注释里；
+ * 这里接到渲染层，保证输入框拒绝 / 开工程提示 / 拖拽收口读到的是同一个数。
+ */
+const MAX_TOTAL_MS = MCS.MAX_TOTAL_MS;
+/**
+ * 标尺刻度的条数预算 —— 的最后一道闸。
+ *
+ * 复现：总长粘 21 位数字后失焦，renderTimeline 里 `for (ms = 0; ms <= maxMs; ms += step)`
+ * 的循环次数 ≈ 总长 / 步长，等于让渲染进程去跑 4e18 次循环 → 整窗永久卡死。
+ * 正常用量的上限：3600000ms（1 小时）在 ZOOM_MAX=4 px/ms 下约 14.4 万条，仍在预算内，
+ * 所以既有长时序的刻度密度一分不变；只有真正离谱的值才会被放大步长。
+ */
+const MAX_RULER_TICKS = 200000;
+/**
+ * 时间轴容器 / 标尺的布局宽度硬闸（px）—— 同一张卡。
+ * Chrome 的布局宽度上限约 3.35e7 px，超过它滚动与绘制都会失真；总长被上限限住后
+ * （3600000ms × ZOOM_MAX 4 = 1.44e7 px）正常路径永远碰不到这里，只防外部工程里
+ * 写进来的离谱总长。⚠ 只夹「画多宽」，**不夹数据**：工程里的总长原值照原样保存。
+ */
+const MAX_RENDER_WIDTH_PX = 30000000;
 
 /**
  * 已放音频片段的最晚结束时间（ms）。
  * 它是「总长的硬下限」：总长缩到它前面，最后那段音效就会被播放/播放头边界切掉 ——
- * 卡 t_6b99a1fd 的覆盖例就是这样：6000ms 总长里 5500ms 放了一段到 5800ms 的音效，
+ * 的覆盖例就是这样：6000ms 总长里 5500ms 放了一段到 5800ms 的音效，
  * 总长必须停在 5800ms 而不是继续往下缩。
  */
 function clipsMaxEndMs() {
@@ -1293,10 +1574,57 @@ function totalFloorMs() {
   return Math.max(MIN_TOTAL_MS, clipsMaxEndMs());
 }
 
+// ---------------------------------------------------------------------------
+// 「下限为什么不能再短」的文案
+//   以前不看工程实况，一律写「最后一段音效的结束时间」——空工程里根本没有音效，
+//   用户被指向一个不存在的东西。现在按实况分三种说法：
+//     ① 一个音效都没有 → 下限只是本版本的最小总长，跟音效无关；
+//     ② 有音效但最后一段没顶到最小总长 → 下限仍是最小总长，但如实说明音效只到哪；
+//     ③ 最后一段音效晚于最小总长 → 下限就是那一段的结束时间（原来的说法）。
+// ---------------------------------------------------------------------------
+const _floorS = (ms) => (ms / 1000).toFixed(3);
+
+/** 被下限拦住时的正题（状态栏第一行）；floorMs = 实际停在的那个值 */
+function floorClampTitle(floorMs) {
+  const f = _floorS(floorMs);
+  const end = clipsMaxEndMs();
+  if (end <= 0) return `工程最短 ${f}s（没有音效可挪），总长不能再短`;
+  if (end <= MIN_TOTAL_MS) {
+    return `总长不能短于 ${f}s（工程最短：最后一段音效只到 ${_floorS(end)}s，还没顶到下限）`;
+  }
+  return `总长不能短于 ${f}s（最后一段音效的结束时间）`;
+}
+
+/** 被下限拦住时的补充（状态栏第二行）：已经停在哪 / 想更短怎么办 */
+function floorClampHint(valueMs, floorMs) {
+  const v = _floorS(valueMs);
+  const f = _floorS(floorMs);
+  const end = clipsMaxEndMs();
+  if (end <= 0) return `已停在 ${v}s；本版本最小总长就是 ${f}s`;
+  if (end <= MIN_TOTAL_MS) return `已停在 ${v}s；最后一段音效没顶到 ${f}s，所以下限还是 ${f}s`;
+  return `已停在 ${v}s；想更短就先把它前面的音效挪走或缩短`;
+}
+
+/** 拖动中途被拦住时的「还能怎么缩」 */
+function floorShrinkHint(floorMs) {
+  const f = _floorS(floorMs);
+  if (clipsMaxEndMs() <= 0) return `本版本最小总长就是 ${f}s，再往下拖也不会更短`;
+  return '把它前面的音效挪走或缩短，才能继续缩总长';
+}
+
+/** 只提一句「下限是多少、为什么」时用（拖动开始 / 松手 / 抓手提示） */
+function floorLabel(floorMs) {
+  const f = _floorS(floorMs);
+  const end = clipsMaxEndMs();
+  if (end <= 0) return `下限 ${f}s（工程最短，没有音效可挪）`;
+  if (end <= MIN_TOTAL_MS) return `下限 ${f}s（工程最短；最后一段音效只到 ${_floorS(end)}s）`;
+  return `下限 ${f}s（最后一段音效的结束时间）`;
+}
+
 /**
  * 「总长」的唯一真相来源。
  *
- * 为什么不再让 visual.manualMs / visual.naturalMs 优先（卡 t_6b99a1fd）：
+ * 为什么不再让 visual.manualMs / visual.naturalMs 优先：
  *   以前这三个值里**任意一个**非空就盖过顶栏的「总长(ms)」，于是导入一次动画
  *   （会写 naturalMs）之后，用户在顶栏改总长完全不起作用 —— 播放边界、时间显示、
  *   灰尾几何全都还用那个旧的自然时长，用户看到的是「输入框变了、时间轴没变」。
@@ -1449,7 +1777,7 @@ function renderLibrary() {
     html.push(`<div class="group-body" data-group="fav" hidden></div>`);
   }
 
-  // —— 原版事件：分类 → 子类（任意层深，卡 t_3623451f）——
+  // —— 原版事件：分类 → 子类（任意层深）——
   const evItems = rest.filter((x) => x.kind === 'event');
   const fileItems = rest.filter((x) => x.kind !== 'event');
 
@@ -1499,7 +1827,7 @@ function renderLibrary() {
 }
 
 /**
- * 渲染一个分类下的子类树（卡 t_3623451f）。
+ * 渲染一个分类下的子类树。
  *
  * 为什么不是「写死两层」：子类路径长度不一 —— 生物是 分类→生物，方块是 分类→玩法域，
  * 物品使用是 分类→物品使用→族（三级）。统一按「路径」建树、递归渲染，加规则不用改这里。
@@ -1566,7 +1894,7 @@ function renderSubGroups(html, arr, category, parentGid, depth, isOpen, EV) {
 }
 
 /**
- * 搜索框右侧的「清空」按钮（卡 t_3623451f）。
+ * 搜索框右侧的「清空」按钮。
  *
  * 三条要求：只在有文字时出现、鼠标能点、键盘也能用。
  *   · 显示条件只看输入框自己有没有内容（不 trim：敲了空格也是「有文字」，
@@ -1609,7 +1937,7 @@ function setupSearchClear() {
     inp.addEventListener('keydown', (e) => {
       if (e.key === 'Escape' && inp.value.length) {
         e.preventDefault();
-        // 卡 t_4e96920b：不能让事件继续冒泡到 window 的全局 Esc 处理器 ——
+        // 不能让事件继续冒泡到 window 的全局 Esc 处理器 ——
         // 那个处理器会 clearSelection() 并写「已取消选中」，把这里刚写的
         // 「已清空搜索」盖掉，用户以为刚才操作的是片段选择。清空只发生在
         // 「框里有字」时，所以框空着按 Esc 仍然照旧走全局（取消选中/关弹窗）。
@@ -1812,7 +2140,7 @@ function bindLibraryEvents(list, EV) {
 
 // 加载原版音效库（事件形式，含变体 + 中文描述）
 async function loadVanillaLibrary() {
-  // 首次加载库的耗时（卡 t_20c2e144）：从「点按钮」到「列表可交互」的墙钟时间，
+  // 首次加载库的耗时：从「点按钮」到「列表可交互」的墙钟时间，
   // 含主进程读 1.3MB 索引 + 路径重绑 + 渲染列表。只记第一次 —— 之后是增量刷新。
   const loadT0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
   const r = await window.mcs.loadVanillaLibrary();
@@ -1843,7 +2171,7 @@ async function loadVanillaLibrary() {
   status(`已加载原版音效库：${evts.length} 个事件 / ${r.library.variantCount} 个变体`,
          `${withDesc} 个带中文描述`);
 
-  // 记下这次加载的真实规模与耗时（卡 t_20c2e144）——「导出系统信息」里那两行
+  // 记下这次加载的真实规模与耗时——「导出系统信息」里那两行
   // 可核对的坐标就是这里来的，不猜、不写死。耗时只在第一次记（后续是增量刷新）。
   const loadMs = Math.round(((typeof performance !== 'undefined' && performance.now)
     ? performance.now() : Date.now()) - loadT0);
@@ -1856,8 +2184,7 @@ async function loadVanillaLibrary() {
   if (as && !as.ok) {
     STATE.audioMissing = as;
     STATE.audioDir = as.dir || STATE.audioDir || '';
-    status(`音效库已加载，但试听音频未就位（${evts.length} 个事件仍可拖拽和导出）`,
-           '点此查看怎么放音频');
+    status(`音效库已加载，但试听音频未就位（${evts.length} 个事件仍可拖拽和导出）`);
     setAudioHelpClickable(true);
     renderLibrary();
   } else if (as && as.ok) {
@@ -1982,7 +2309,7 @@ function paintClipWave(el, clip) {
 function renderTimeline() {
   const cfg = STATE.doc.config;
   // 片段被拖到总长之外时先把总长顶上去：总长永远是「真实边界」，
-  // 否则片段会落在边界之外，出现「看得见却播不到」的自相矛盾（卡 t_6b99a1fd）
+  // 否则片段会落在边界之外，出现「看得见却播不到」的自相矛盾
   syncTotalBoundary();
   const total = totalMs();
   const pxPerMs = STATE.zoom;
@@ -2000,36 +2327,57 @@ function renderTimeline() {
   // 定义收在 contentWidthPx() 里：灰尾几何（tailShadeGeom）和越尾徽标的文案都用它，
   // 免得两处各算一份、哪天改歪了徽标就会去说一条不存在的灰尾。
   const contentW = contentWidthPx();
-  const W = Math.max(contentW, 600);
+  // 布局宽度硬闸：只夹「画多宽」，不动数据。
+  // 正常用量（总长 ≤ 3600000ms）× 缩放 4 只有 1.44e7 px，压根碰不到这里；
+  // 它挡的是外部工程里写进来的离谱总长 —— 那种值以前会让标尺宽成 1e20px，
+  // 布局直接卡死。数据原值仍在 doc.config.totalMs 里，保存照写。
+  const W = Math.min(Math.max(contentW, 600), MAX_RENDER_WIDTH_PX);
 
   // ---- 标尺 ----
   const ruler = $('ruler');
   ruler.style.width = W + 'px';
   const ticks = [];
-  const step = chooseRulerStep(pxPerMs);
+  let step = chooseRulerStep(pxPerMs);
   // 刻度要画满整条可见宽度（W），而不是只画到 total —— 片段可以超出总长，
   // 超出部分如果没刻度，用户就看不出它落在第几秒。
-  const maxMs = Math.max(total, furthest);
+  // 但上限是「实际画得出来的那一段」：布局闸外的坐标画了也看不见，还会让
+  // 200k 个 left:1e21px 的元素把布局拖慢。
+  const drawableMs = MAX_RENDER_WIDTH_PX / pxPerMs;
+  const maxMs = Math.min(Math.max(total, furthest), drawableMs);
+  // 条数预算（的最后一道闸）：循环次数 ≈ maxMs / step，必须有限。
+  // 需要超过 MAX_RULER_TICKS 条时按整数倍放大步长 —— 主刻度仍按放大后的步长对齐，
+  // 位置照旧是真实毫秒坐标，不撒谎；正常总长（≤1 小时）永远进不到这个分支。
+  if (maxMs / step > MAX_RULER_TICKS) {
+    step = Math.ceil(maxMs / MAX_RULER_TICKS / step) * step;
+  }
   for (let ms = 0; ms <= maxMs; ms += step) {
     const x = ms * pxPerMs;
     const isMajor = (ms % (step * 5) === 0);
     ticks.push(`<div class="ruler-tick${isMajor ? ' major' : ''}" style="left:${x}px">${isMajor ? fmtMs(ms) : ''}</div>`);
   }
   // BPM 拍线
+  // 拍线循环同样必须有条数预算（的同类防线，最小改动、不加新功能）：
+  // bpm 输入框没有上限，1e9 会让 beatMs 小到 6e-5ms，循环次数 = 总长/beatMs ≈ 1e10，
+  // 一样能把渲染进程卡死。条数超预算就整批不画 —— 这种密度的拍线在视觉上本来就是一片。
   if (cfg.bpm > 0 && $('chkBeats').checked) {
     const beatMs = 60000 / cfg.bpm;
     const barMs = beatMs * (cfg.beatsPerBar || 4);
-    for (let ms = 0; ms <= total; ms += beatMs) {
-      const isBar = Math.abs((ms / barMs) - Math.round(ms / barMs)) < 1e-6;
-      ticks.push(`<div class="${isBar ? 'ruler-bar' : 'ruler-beat'}" style="left:${ms * pxPerMs}px"></div>`);
+    if (total / beatMs <= MAX_RULER_TICKS) {
+      for (let ms = 0; ms <= total; ms += beatMs) {
+        const isBar = Math.abs((ms / barMs) - Math.round(ms / barMs)) < 1e-6;
+        ticks.push(`<div class="${isBar ? 'ruler-bar' : 'ruler-beat'}" style="left:${ms * pxPerMs}px"></div>`);
+      }
     }
   }
   ruler.innerHTML = ticks.join('');
-  // ---- 总长边界条（卡 t_6b99a1fd）----
+  // ---- 总长边界条----
   // 「[]」形式的边界：右括号 = 抓手（拖它改总长），左括号标出「时间轴从 0 开始」。
   // 抓手挂在标尺条里，而不是轨道区：轨道区里那些位置要留给片段拖动，
   // 一个压在片段上的抓手会把「点片段」抢走。轨道区里另画一条只看不摸的边界线（#totalEdge）。
-  ruler.appendChild(makeTotalGrip(total * pxPerMs, total));
+  // 抓手的左边同样夹进布局闸：外部工程的离谱总长不能把它推到 1e20px 之外
+  ruler.appendChild(makeTotalGrip(Math.min(total * pxPerMs, MAX_RENDER_WIDTH_PX), total));
+  // / P2-B：总长文字移到视口 HUD（#rulerHud），每次重绘同步一次。
+  updateRulerHud();
 
   // ---- 轨道 ----
   const lanes = $('laneArea');
@@ -2084,15 +2432,27 @@ function renderTimeline() {
     if (muted) el.style.opacity = '0.35';
 
     el.style.left = (c.startMs * pxPerMs) + 'px';
-    el.style.width = Math.max(c.durationMs * pxPerMs, 14) + 'px';
+    // 片段像素宽只算一次：既给 el.style.width，也给下面「窄片段紧凑排版」的判定用
+    const wPx = Math.max(c.durationMs * pxPerMs, 14);
+    el.style.width = wPx + 'px';
+    // 最小缩放下 8s 片段约 40px：留给文字的净宽只有约 32px，按原样排版角标会被裁掉半个数字。
+    // 这里打一个类，由 CSS 换成紧凑排版（隐藏被挤到 0 宽的标签、角标缩字号）。
+    if (wPx < VOL_BADGE_FULL_TEXT_MIN_PX) el.classList.add('clip-narrow');
 
     const badges = [];
     if (c.locked) badges.push('<span class="c-badge lock">锁定</span>');
     // 角标只在值真是数字时才画：导入路径会先把缺字段补成 1.0（normalizeImportedDoc），
-    // 这里再兜一层 —— 渲染不该因为一条片段的字段坏掉就整条时间轴画不出来（卡 t_59ec2202：
+    // 这里再兜一层 —— 渲染不该因为一条片段的字段坏掉就整条时间轴画不出来（
     // 以前 c.pitch 是 undefined 时 `c.pitch.toFixed(2)` 直接抛未捕获异常，4 个片段只画出 1 个）。
     if (typeof c.pitch === 'number' && c.pitch !== 1.0) badges.push(`<span class="c-badge pitch">${c.pitch.toFixed(2)}x</span>`);
-    if (typeof c.volume === 'number' && c.volume !== 1.0) badges.push(`<span class="c-badge">vol ${c.volume.toFixed(2)}</span>`);
+    if (typeof c.volume === 'number' && c.volume !== 1.0) {
+      // 最小缩放下片段只有 40px 宽，留出边框与内边距后角标只剩约 32px；
+      // 「vol 0.90」实测 44.5px，会被 overflow 裁成半个数字并压在波形描边上。
+      // 够宽仍写完整前缀；不够宽只留数值 + 换成 on-narrow 紧凑排版（见 style.css .clip-narrow），
+      // 含义由 .c-badge.vol 配色与 title 兜住。
+      const vTxt = c.volume.toFixed(2);
+      badges.push(`<span class="c-badge vol" title="音量 ${vTxt}">${wPx >= VOL_BADGE_FULL_TEXT_MIN_PX ? 'vol ' : ''}${vTxt}</span>`);
+    }
 
     // 裁剪 / 淡入淡出也要在片段条上看得见（否则用户只能去属性面板翻才知道）
     if (isTrimmed(c)) {
@@ -2131,20 +2491,21 @@ function renderTimeline() {
   {
     const edge = document.createElement('div');
     edge.id = 'totalEdge';
-    edge.style.left = (total * pxPerMs) + 'px';
+    // 同上：边界线位置也夹进布局闸，不让离谱总长把元素甩到可布局范围之外
+    edge.style.left = Math.min(total * pxPerMs, MAX_RENDER_WIDTH_PX) + 'px';
     edge.innerHTML = '<span class="te-cap top"></span><span class="te-cap bot"></span>';
     lanes.appendChild(edge);
   }
 
-  // ---- GIF 区间的「灰尾」（P2-1）----
+  // ---- GIF 区间的「灰尾」----
   // 时间轴比 GIF 长时（用户把总长调长了），GIF 末尾之后那段是没有画面的：
   // 压一层灰 + 一条虚线分界，让「GIF 就到这儿」一眼可见，不用先去数秒数。
   // 纯显示层：不改 W、不改片段、不挡鼠标；这里定位一次，缩放/总长/GIF 变化都会重绘跟上。
   const geom = tailShadeGeom(contentW);
   if (geom.visible) {
     tailShade.style.display = 'block';
-    tailShade.style.left = geom.left + 'px';
-    tailShade.style.width = geom.width + 'px';
+    tailShade.style.left = Math.min(geom.left, MAX_RENDER_WIDTH_PX) + 'px';
+    tailShade.style.width = Math.min(geom.width, MAX_RENDER_WIDTH_PX) + 'px';
   } else {
     tailShade.style.display = 'none';
   }
@@ -2173,8 +2534,8 @@ function trackLabelHtml() {
       : 'title="删除该轨道及其片段"';
     return `<div class="track-label${sel ? ' is-selected' : ''}" data-track="${esc(t.name)}">
        <span class="tl-name" title="双击重命名">${esc(t.label)}</span>
-       <button class="tl-btn ${t.muted ? 'on' : ''}" data-act="mute" title="静音该轨道">M</button>
-       <button class="tl-btn ${t.solo ? 'on' : ''}" data-act="solo" title="独奏该轨道">S</button>
+       <button class="tl-btn ${t.muted ? 'on' : ''}" data-act="mute" aria-pressed="${t.muted ? 'true' : 'false'}" title="${t.muted ? '取消静音' : '静音该轨道'}">M</button>
+       <button class="tl-btn ${t.solo ? 'on' : ''}" data-act="solo" aria-pressed="${t.solo ? 'true' : 'false'}" title="${t.solo ? '取消独奏' : '独奏该轨道'}">S</button>
        <button class="tl-btn tl-del" data-act="del" ${delAttr}>✕</button>
      </div>`;
   }).join('');
@@ -2247,6 +2608,10 @@ function setupTimelineDrop() {
     updatePlayhead(ms);
     // 拖动进度时 GIF 同步到对应进度（往回拉也会倒退）
     syncVisualTo(ms);
+    // 拖动试听：手上到哪，就听那一小段。
+    // 引擎内部按 drift 去重，快速连发的 mousemove 不会堆出一串音源；
+    // 静音 / 独奏 / 裁剪 / 变速 / 音量全在 clipsForPlayback() 里算好。
+    AudioEngine.scrubAt(clipsForPlayback(), ms);
   };
 
   /** 收尾一次拖动（鼠标松开 / 松在窗口外 / 窗口失焦都要走到这里） */
@@ -2255,6 +2620,9 @@ function setupTimelineDrop() {
     scrubbing = false;
     STATE.scrubbing = false;
     ruler.style.cursor = '';
+    // 松手 = 停止试听。先关掉整条 scrub 总线（30ms 淡出），再决定要不要续播，
+    // 这样「松手还有声音」和「续播时两个声音叠着」都不会发生。
+    AudioEngine.stopScrub();
     if (scrubWasPlaying) {
       // 从鼠标松开的位置继续播放（音频 + 画面一起对齐）
       resumePlaybackAt(STATE.playheadMs);
@@ -2262,10 +2630,21 @@ function setupTimelineDrop() {
     } else {
       // 暂停状态下再定位一次：保证画面停在鼠标放开的那一帧
       syncVisualTo(STATE.playheadMs);
+      // 试听已经停了，状态栏不能继续挂着「拖动试听中 / 手到哪儿听哪儿，松手即停」
+      // （实测松手后 scrubbing=false、没声音了，文案却一直残留，
+      //  GIF / 视频情况下超过 500ms 也不更新；窗口失焦、buttons=0 收尾同样残留）。
+      // 收到这里时就写回真实状态；暂停按钮用的也是同一句「已暂停 / 停在 X.XXs」。
+      // 万一拖动期间有人按了播放（transport 已回到 playing），就以实际播放状态为准。
+      if (STATE.transport === 'playing') status(playStatusText());
+      else pausedStatusHint();
     }
   };
 
-  ruler.addEventListener('mousedown', (e) => {
+  /**
+   * 按下 = 开始拖动试听（scrub）。
+   * 标尺和播放头抓手走的是同一个执行体 —— 用户想拖"那条红线"还是"标尺"都行。
+   */
+  const startScrubDrag = (e) => {
     scrubbing = true;
     // 播放中拖标尺：先把音频时钟停下来。
     // 否则音频的 onTick 会一边拖一边把播放头改回"音频当前时刻"，
@@ -2280,11 +2659,24 @@ function setupTimelineDrop() {
       STATE.transport = 'scrubbing';
       // 「松手后…」只在手还按着的时候成立，所以按一次性提示写（松手续播时自动消失）
       statusHint('已暂停，可拖动定位', '松手后从拖到的位置继续播放');
+    } else {
+      statusHint('拖动试听中', '手到哪儿听哪儿，松手即停');
     }
+    // 开拖动试听会话（幂等）：从这一刻起，移动只管"定位到哪儿 + 试听那一小段"
+    AudioEngine.scrubStart();
     ruler.style.cursor = 'grabbing';
     doScrub(e);
     e.preventDefault();
-  });
+  };
+
+  ruler.addEventListener('mousedown', startScrubDrag);
+
+  // 播放头抓手（红线顶上的小三角）：抓它也能拖。
+  // #playhead 本身 pointer-events:none（不挡片段拖动 / 框选），
+  // 只有 ::before 那个抓手打开 pointer-events —— 见 style.css。
+  const playheadEl = $('playhead');
+  if (playheadEl) playheadEl.addEventListener('mousedown', startScrubDrag);
+
   window.addEventListener('mousemove', (e) => {
     if (!scrubbing) return;
     // 鼠标已经松开却收不到 mouseup（松在窗口外）→ 自己收尾，
@@ -2334,7 +2726,7 @@ function setupTimelineDrop() {
         variantCount: info.variantCount || 1,
         startMs: ms,
         durationMs: dur,
-        srcDurMs: dur,   // 源音频自然长度：非破坏性裁剪「最远能拖回哪儿」的边界（卡 t_47b9fab2）
+        srcDurMs: dur,   // 源音频自然长度：非破坏性裁剪「最远能拖回哪儿」的边界
         track: trackName,
       });
       STATE.doc.clips.push(clip);
@@ -2365,7 +2757,7 @@ function setupTimelineDrop() {
         kind: 'file',
         startMs: ms,
         durationMs: dur,
-        srcDurMs: dur,   // 源音频自然长度：非破坏性裁剪「最远能拖回哪儿」的边界（卡 t_47b9fab2）
+        srcDurMs: dur,   // 源音频自然长度：非破坏性裁剪「最远能拖回哪儿」的边界
         track: trackName,
       });
       STATE.doc.clips.push(clip);
@@ -2381,7 +2773,7 @@ function setupTimelineDrop() {
 }
 
 // ---------------------------------------------------------------------------
-// 总长边界条（卡 t_6b99a1fd）
+// 总长边界条
 //
 // 界面上的样子：「[  总长 6.00s ]」——左括号钉在 0ms，右括号就是抓手。
 // 抓手放在标尺条里（轨道区的位置要留给片段拖动，抓手压在片段上会抢走点击），
@@ -2397,17 +2789,142 @@ let TOTAL_PIPE_ARMED = false;   // 拖拽管道是否已装（setupTotalBoundary
 function makeTotalGrip(leftPx, totalMsValue) {
   // 顺带把 window 级的拖拽管道装上（幂等）。为什么不写在 boot() 里：
   // app.js 被多张并行卡同时改，boot() 体里的接线被整文件写覆盖过一次 ——
-  // 让接线跟着**本卡自己的**函数走，就少一处被别人覆盖的面（卡 t_6b99a1fd）。
+  // 让接线跟着**本文件自己的**函数走，就少一处被别人覆盖的面。
   setupTotalBoundary();
   const el = document.createElement('div');
   el.id = 'totalGrip';
   el.style.left = leftPx + 'px';
-  el.title = '拖动调整时间轴总长（下限 = 最后一段音效的结束时间）';
+  el.title = '拖动调整时间轴总长，' + floorLabel(totalFloorMs());
+  // .tg-label 仍在 DOM 里（DBG.total().gripLabel 读它），但视觉上由视口 HUD 承担，
+  // 见 CSS 里 .tg-label{display:none} —— 这样滚动时不会再跟着滚出右边界。
   el.innerHTML = '<span class="tg-bar"></span>'
     + '<span class="tg-cap top"></span><span class="tg-cap bot"></span>'
-    + `<span class="tg-label">总长 ${(totalMsValue / 1000).toFixed(2)}s</span>`;
+    + `<span class="tg-label">${totalHudText(totalMsValue)}</span>`;
+  el.setAttribute('aria-label', totalHudText(totalMsValue));
   el.addEventListener('mousedown', startTotalDrag);
   return el;
+}
+
+// ---- 总长 HUD（/ P2-B）-----------------------------------------
+// 文字贴在标尺「视口」右侧（内缩 8px，并让开纵向滚动条），不随横向滚动跑掉，
+// 所以滚动 / 缩放 / 长数字都不会再被右栏边缘裁切。
+// 真实终点仍由标尺上的 #totalGrip 与轨道区的 #totalEdge 按真实坐标画；
+// 终点滚到可视区右侧之外时，这里加一个「→」并说明终点在右侧 ——
+// 绝不把「当前可见的最后一个刻度」当成终点。
+function totalHudText(ms) {
+  return `总长 ${(ms / 1000).toFixed(2)}s`;
+}
+
+// ---- 总长 HUD 与真实终点把手的避让（/ P2， 补修）------
+// 默认 HUD 贴标尺视口右侧。但真实终点把手（#totalGrip，宽 14px、中心在 endX）
+// 横向滚进可视区、又恰好落在 HUD 那一小块上时，黄色竖线会穿过数字（实测
+// 在最右滚动 scrollLeft=956 稳定复现：HUD 671.9..752 与把手 713..727 相交）。
+// 处理原则：让 HUD 走开，绝不挪走真实终点、不藏把手、不改语义。
+//
+//  的第一版只判「HUD 右边缘是否越过把手左边」，等于默认把手一定在
+// HUD 右侧；可终点从**左边**滚进视口时（适合窗口后滚到最右，把手在视口左端），
+// HUD 本来贴在右端根本不碰把手，却被误判成相撞 → 被推到左边界 8px 处，反而
+// 压住把手（HUD 433.9..514、文字 442.9..507、把手 447..461，
+// text∩grip=243.54px²）。所以这里改成**两个矩形真实相交**才避让，并且：
+//   1. 默认位置不相交 → 留在默认位置（最常见，也是这次失败路径的正解）；
+//   2. 相交 → 算把手左右两侧各剩多少空间，放到空间更大的一侧，间距 HUD_GAP；
+//   3. 两侧都塞不下完整文字（超长数字 + 窄视口）→ 选空间大的一侧并把 HUD 的
+//      max-width 收到那点空间，文字照旧被裁切；这是 HUD 自身 max-width 的既有
+//      边界，重点是不与把手相交、也不把 HUD 顶出视口。
+const HUD_GRIP_HALF = 7;   // #totalGrip width:14px + margin-left:-7px → 中心两侧各 7px
+const HUD_GAP = 6;         // HUD 边缘与把手之间至少留的空当
+const HUD_EDGE = 8;        // 与标尺视口左右边界的内缩（与 CSS right:8px 对齐）
+
+/**
+ * 算 HUD 的右边距（视口坐标，不随横向滚动移动）。
+ * 返回 { right, avoided, side, maxWidth }：
+ *   side      'right' | 'left'，HUD 最终在把手哪一侧；
+ *   maxWidth  需要临时收窄的宽度（px），null 表示不用收。
+ */
+function hudPlacement(sa, hud, endX, dir) {
+  // 让开纵向滚动条（没有滚动条时 offsetWidth==clientWidth，就只留 8px）
+  const sbW = Math.max(0, sa.offsetWidth - sa.clientWidth);
+  const base = HUD_EDGE + sbW;               // 默认位置：贴右
+  const vw = sa.clientWidth;
+  const hudW = hud.offsetWidth;
+  // dir!==0 表示终点整个滚出视口，那时把手根本不在视口内，压不到数字
+  if (dir !== 0 || !hudW || vw <= 0) {
+    return { right: base, avoided: false, side: 'right', maxWidth: null };
+  }
+  // 把手在当前视口里的左右边（滚动内容坐标 → 视口坐标）
+  const gripLeft = (endX - sa.scrollLeft) - HUD_GRIP_HALF;
+  const gripRight = gripLeft + HUD_GRIP_HALF * 2;
+  const defRight = vw - base;                // 默认位置 HUD 的右边缘
+  const defLeft = defRight - hudW;           // 默认位置 HUD 的左边缘
+  // 默认位置与把手真实相交吗？（两侧都留 HUD_GAP 才算不相交）
+  const hit = gripRight + HUD_GAP > defLeft && gripLeft - HUD_GAP < defRight;
+  if (!hit) return { right: base, avoided: false, side: 'right', maxWidth: null };
+  // 把手左侧可用宽度 / 右侧到视口右边界可用宽度
+  const leftSpace = gripLeft - HUD_GAP - HUD_EDGE;
+  const rightSpace = defRight - (gripRight + HUD_GAP);
+  // 放到空间更大的一侧；塞不下完整宽度就收到可用宽度（文字裁切，但不与把手相交）
+  if (leftSpace >= rightSpace) {
+    const w = Math.max(0, Math.min(hudW, leftSpace));
+    return {
+      right: vw - (gripLeft - HUD_GAP),
+      avoided: true, side: 'left',
+      maxWidth: w < hudW ? w : null,
+    };
+  }
+  const w = Math.max(0, Math.min(hudW, rightSpace));
+  return {
+    right: vw - (gripRight + HUD_GAP + w),
+    avoided: true, side: 'right',
+    maxWidth: w < hudW ? w : null,
+  };
+}
+
+function updateRulerHud() {
+  const hud = $('rulerHud');
+  if (!hud) return;
+  const text = $('rulerHudText');
+  const arrow = $('rulerHudArrow');
+  const sa = $('scrollArea');
+  const total = totalMs();
+  const label = totalHudText(total);
+  if (text && text.textContent !== label) text.textContent = label;
+
+  let dir = 0;   // 0 = 终点在可视区内；1 = 终点在右侧外；-1 = 终点在左侧外
+  const endX = total * STATE.zoom;              // 终点在滚动内容里的 x
+  if (sa) {
+    const viewLeft = sa.scrollLeft;
+    const viewRight = sa.scrollLeft + sa.clientWidth;
+    if (endX > viewRight - 4) dir = 1;
+    else if (endX < viewLeft + 4) dir = -1;
+  }
+  // 箭头先定下来：它有宽度，HUD 的宽度要按「最终形态」量，否则让位会算少几像素
+  if (arrow) {
+    arrow.hidden = dir === 0;
+    if (dir) arrow.textContent = dir > 0 ? '→' : '←';
+  }
+  if (sa) {
+    // 每次重算前先撤掉上一次的临时收窄，否则量到的宽度会是被上一条路径裁过的
+    hud.style.maxWidth = '';
+    const place = hudPlacement(sa, hud, endX, dir);
+    // 两侧都塞不下完整文字时才收窄（见 hudPlacement 第 3 条）
+    if (place.maxWidth != null) hud.style.maxWidth = place.maxWidth + 'px';
+    hud.style.right = place.right + 'px';
+    hud.dataset.avoidGrip = place.avoided ? 'true' : 'false';
+    hud.dataset.avoidSide = place.side;
+  }
+  hud.dataset.offscreen = dir === 0 ? 'false' : 'true';
+  hud.dataset.dir = String(dir);
+  // 到最小缩放仍铺不满时，别再说「点适合窗口可看到」（点了也看不到）—— P1 反馈统一
+  // （3600s 时序在 0.005 px/ms 下终点还在 22 倍视口之外）
+  const viewMs = (sa && STATE.zoom > 0) ? sa.clientWidth / STATE.zoom : 0;
+  const atMinAndNotFit = dir > 0 && STATE.zoom <= ZOOM_MIN + 1e-12 && total > viewMs * 1.01;
+  hud.title = dir > 0
+    ? (atMinAndNotFit
+      ? `时间轴总长 ${(total / 1000).toFixed(2)}s：当前已是最小缩放（${fmtZoom(ZOOM_MIN)} px/ms），一屏约 ${(viewMs / 1000).toFixed(1)}s，整段约 ${(total / viewMs).toFixed(1)} 屏；终点在右侧可视区外`
+      : `时间轴总长 ${(total / 1000).toFixed(2)}s：终点在右侧可视区外，向右滚动或点「适合窗口」可看到`)
+    : (dir < 0
+      ? `时间轴总长 ${(total / 1000).toFixed(2)}s：终点在左侧可视区外，向左滚动可看到`
+      : '时间轴总长；拖动标尺上的黄色把手可改总长');
 }
 
 function startTotalDrag(e) {
@@ -2420,7 +2937,7 @@ function startTotalDrag(e) {
   document.body.classList.add('total-dragging');
   const floor = totalFloorMs();
   status(`拖动调整总长（当前 ${(STATE.doc.config.totalMs / 1000).toFixed(2)}s）`,
-    `下限 ${(floor / 1000).toFixed(3)}s ＝ 最后一段音效的结束时间`);
+    floorLabel(floor));
 }
 
 function moveTotalDrag(e) {
@@ -2431,8 +2948,7 @@ function moveTotalDrag(e) {
   const r = setTotalMs(TOTAL_DRAG.startTotal + dx / STATE.zoom, { source: 'drag', quiet: true });
   if (r.clamped) {
     // 被下限拦住：说清为什么，并给出「想再短该怎么办」
-    status(`总长不能短于 ${(r.floor / 1000).toFixed(3)}s（最后一段音效的结束时间）`,
-      '把它前面的音效挪走或缩短，才能继续缩总长');
+    status(floorClampTitle(r.floor), floorShrinkHint(r.floor));
   } else {
     status(`总长 ${(r.value / 1000).toFixed(3)}s`, '松手生效');
   }
@@ -2448,18 +2964,17 @@ function endTotalDrag() {
   const floor = totalFloorMs();
   if (!d.moved) {
     status(`总长 ${(t / 1000).toFixed(3)}s`,
-      `拖动这条边界可改总长；下限 ${(floor / 1000).toFixed(3)}s（最后一段音效的结束时间）`);
+      `拖动这条边界可改总长；${floorLabel(floor)}`);
     return;
   }
   markDirty('total');          // 收口：拖动期间已经记过，这里只是保证「只点不动」不会留下空撤销步
   if (STATE.transport === 'playing') resumePlaybackAt(Math.min(STATE.playheadMs || 0, totalMs()));
   if (t <= floor) {
     // 停在硬下限上：必须说清「为什么不能再短」，否则用户只会觉得拖不动
-    status(`总长已到下限 ${(t / 1000).toFixed(3)}s（最后一段音效的结束时间）`,
-      '想更短就先把最后那段音效挪走或缩短');
+    status(floorClampTitle(t), floorClampHint(t, floor));
   } else {
     status(`总长已改为 ${(t / 1000).toFixed(3)}s`,
-      `下限 ${(floor / 1000).toFixed(3)}s = 最后一段音效的结束时间`);
+      floorLabel(floor));
   }
   revalidate();
 }
@@ -2472,6 +2987,11 @@ function setupTotalBoundary() {
   window.addEventListener('mousemove', moveTotalDrag);
   window.addEventListener('mouseup', endTotalDrag);
   window.addEventListener('blur', endTotalDrag);
+  // 总长 HUD 是「视口坐标」，横向滚动 / 窗口缩放都要重新算
+  // 「终点是否还在可视区内」。挂在这里同样是幂等的（本函数只跑一次）。
+  const sa = $('scrollArea');
+  if (sa) sa.addEventListener('scroll', updateRulerHud, { passive: true });
+  window.addEventListener('resize', updateRulerHud);
   return true;
 }
 
@@ -2491,6 +3011,44 @@ function autoExtendTotal(startMs, durMs) {
 }
 
 /**
+ * 任何把 durationMs 改小的入口都会让「淡入 + 淡出」可能超过条长，
+ * timeline.js 的 normalizeFades 会把它们收短（先收淡入、再收淡出）。
+ * 这里只负责**如实播报**：哪一侧被收短、从多少到多少，用落盘后的真实值对比改动前的快照。
+ * 没有真钳制（合法的 800+200 于 1000ms）就返回空串 —— / 修过
+ * 「其实没改也报已自动收短」的误报，别让那句话回归。
+ * @returns {string} '' 或「淡入 600ms → 200ms」这类片段（不含前缀标点）
+ */
+function fadeClampParts(beforeIn, beforeOut, c) {
+  const bIn = Math.max(0, Math.round(Number(beforeIn) || 0));
+  const bOut = Math.max(0, Math.round(Number(beforeOut) || 0));
+  const aIn = Math.max(0, Math.round(Number(c && c.fadeInMs) || 0));
+  const aOut = Math.max(0, Math.round(Number(c && c.fadeOutMs) || 0));
+  const parts = [];
+  if (aIn !== bIn) parts.push(`淡入 ${bIn}ms → ${aIn}ms`);
+  if (aOut !== bOut) parts.push(`淡出 ${bOut}ms → ${aOut}ms`);
+  return parts.join('、');
+}
+
+/** 同上，拼成一句可直接接在状态栏后面的提示（无钳制 = 空串） */
+function fadeClampText(beforeIn, beforeOut, c) {
+  const p = fadeClampParts(beforeIn, beforeOut, c);
+  if (!p) return '';
+  return `　⚠ 淡入 + 淡出不能超过片段长度 ${Math.max(1, Math.round(c.durationMs || 1))}ms，`
+    + `已随本次改短同步收短：${p}`;
+}
+
+/**
+ * 拖动时几何文字里也要带上淡化被收短的事实（拖动过程中就能看见）。
+ * 基准是拖动开始前那组值 —— 逐帧重算是从 orig 复原的，拖回原长度会原样恢复。
+ */
+function dragFadeText(d, c) {
+  const it = d && d.items && d.items[0];
+  if (!it) return '';
+  const p = fadeClampParts(it.origFadeIn, it.origFadeOut, c);
+  return p ? `淡入/淡出已随条长收短：${p}` : '';
+}
+
+/**
  * 拖动 / 裁剪时状态栏那句话（拖动中实时刷，松手后定格）。
  * 四种拖法必须说清楚是哪一种，否则用户看到时长变了会以为倍速没变、或者
  * 以为裁剪把素材删了：
@@ -2502,6 +3060,8 @@ function dragGeomText(d) {
   const c = it.clip;
   const fx = (r) => Number(r).toFixed(2) + 'x';
   const parts = [];
+  const fnote = dragFadeText(d, c);
+  if (fnote) parts.push(fnote);
   if (d.mode === 'trimTail') {
     parts.push(`非破坏性裁剪（尾）：源内 ${Math.max(0, c.offsetMs || 0)}ms → ${srcOutMs(c)}ms`);
     parts.push(`片段长度 ${c.durationMs}ms（倍速不变 ${fx(rateOf(c))}）`);
@@ -2637,7 +3197,7 @@ function setupClipInteraction() {
              '先解锁再整体拖动');
     }
     const dragPrimary = members.find((c) => c.id === clip.id) || members[0];
-    // 拖动的四种含义（卡 t_47b9fab2）：
+    // 拖动的四种含义：
     //   move      拖本体（含左端 8px，不按 Alt 时）—— 整组移动位置，什么都不改
     //   stretch   右手柄 —— 改条长 + 等比改播放倍速（声音正好铺满这条）
     //   trimTail  右手柄 + Alt —— 非破坏性裁剪尾（只推源内出点，素材留着）
@@ -2662,6 +3222,10 @@ function setupClipInteraction() {
         origPitch: rateOf(c),
         origOffset: Math.max(0, c.offsetMs || 0),
         origSrcEnd: c.srcEndMs != null ? c.srcEndMs : null,
+        // 拖动逐帧从「拖动前」重算，淡化也要一起复原
+        // （否则第一帧收短后会越拖越短，拖回原长度也恢复不回来）
+        origFadeIn: Math.max(0, Math.round(c.fadeInMs || 0)),
+        origFadeOut: Math.max(0, Math.round(c.fadeOutMs || 0)),
       })),
     };
     e.preventDefault();
@@ -2718,6 +3282,8 @@ function setupClipInteraction() {
       c.pitch = it.origPitch;
       c.offsetMs = it.origOffset;
       c.srcEndMs = it.origSrcEnd;
+      c.fadeInMs = it.origFadeIn;
+      c.fadeOutMs = it.origFadeOut;
 
       if (dragging.mode === 'stretch') {
         // 普通拖右边缘：条长变了，播放倍速等比跟着变（素材长度不变）
@@ -2825,19 +3391,21 @@ function setupTrackButtons() {
 
     if (btn && t) {
       if (btn.dataset.act === 'mute') {
-        t.muted = !t.muted;
-        markDirty('mute');
-        renderTimeline();
-        status(`${t.label}：${t.muted ? '已静音' : '取消静音'}`);
-        return;
-      }
-      if (btn.dataset.act === 'solo') {
-        t.solo = !t.solo;
-        markDirty('solo');
-        renderTimeline();
-        status(t.solo ? `${t.label}：独奏中` : `${t.label}：退出独奏`);
-        return;
-      }
+              t.muted = !t.muted;
+              markDirty('mute');
+              renderTimeline();
+              syncLiveTrackAudio();          // 播放中立刻生效
+              status(`${t.label}：${t.muted ? '已静音' : '取消静音'}`);
+              return;
+            }
+            if (btn.dataset.act === 'solo') {
+              t.solo = !t.solo;
+              markDirty('solo');
+              renderTimeline();
+              syncLiveTrackAudio();          // 播放中立刻生效
+              status(t.solo ? `${t.label}：独奏中` : `${t.label}：退出独奏`);
+              return;
+            }
       if (btn.dataset.act === 'del') {
         deleteTrack(trackName);
         return;
@@ -2859,7 +3427,7 @@ function setupTrackButtons() {
       name = name + '_' + Math.floor(Math.random() * 100);
     }
     STATE.doc.tracks.push(makeTrack(name, { label }));
-    markDirty('track');        // 卡 t_c4491bba：带 kind，撤销时说「轨道改动」而不是含糊的「操作」
+    markDirty('track');        // 带 kind，撤销时说「轨道改动」而不是含糊的「操作」
     STATE.selectedTrack = name;
     renderTimeline();
     status(`已新建「${label}」`, '把左侧音效拖到这条轨道上即可分层编排');
@@ -2924,11 +3492,12 @@ function deleteTrack(trackName) {
 
   STATE.doc.clips = STATE.doc.clips.filter((c) => c.track !== trackName);
   STATE.doc.tracks.splice(idx, 1);
-  markDirty('track');          // 卡 t_c4491bba：带 kind（删轨道也是轨道改动）
-  if (STATE.selectedTrack === trackName) STATE.selectedTrack = null;
-  renderTimeline();
-  status(`已删除「${t.label}」${n ? `及其 ${n} 个音效` : ''}`);
-}
+  markDirty('track');          // 带 kind（删轨道也是轨道改动）
+    if (STATE.selectedTrack === trackName) STATE.selectedTrack = null;
+    renderTimeline();
+    syncLiveTrackAudio();        // 删掉的轨道上的声音立刻收掉
+    status(`已删除「${t.label}」${n ? `及其 ${n} 个音效` : ''}`);
+  }
 
 // ---------------------------------------------------------------------------
 // 属性面板
@@ -2965,7 +3534,7 @@ function renderProps() {
   $('pSoundId').value = c.soundId || '';
   $('pStart').value = c.startMs;
   $('pDuration').value = c.durationMs;
-  // ---- 裁剪 / 变速 / 淡入淡出（卡 t_47b9fab2）----
+  // ---- 裁剪 / 变速 / 淡入淡出----
   // 面板上必须能看见「源内起止」，否则「非破坏性裁剪」就只是拖一下、
   // 用户既不知道裁掉了多少，也不知道能不能恢复。
   if ($('pOffset')) $('pOffset').value = Math.max(0, c.offsetMs || 0);
@@ -3004,7 +3573,7 @@ function renderProps() {
     const resolved = resolveClipAudio(c);
     // 原版试听音频整份没就位（启动时已探到）时不要写乐观提示：
     // 按钮仍可点（用户可能刚把音频放回去），但文案要说明「点了也不会有声音」，
-    // 并指向状态栏那个「点此查看怎么放音频」的入口（卡 t_8c74ddef 第 1 条）。
+    // 并指向状态栏那个「点此查看怎么放音频」的入口（第 1 条）。
     const audioNotReady = !!STATE.audioMissing;
     if (resolved && resolved.absPath) {
       const fn = resolved.absPath.split(/[\\/]/).pop();
@@ -3039,7 +3608,7 @@ function renderProps() {
 /**
  * 把片段解析成实际可播的音频文件（事件查库，文件直接用）。
  *
- * 卡 t_3623451f：单一入口 —— 时间轴播放走 MCS_EVENTS.resolveForPlayback()，
+ * 单一入口 —— 时间轴播放走 MCS_EVENTS.resolveForPlayback()，
  * 这里也走它，于是「试听」与「播放」不可能再对不上（以前这里判的是 'fixed'，
  * 而界面写进文档的是 'locked'：指定变体在试听这条路上一辈子没生效过）。
  *
@@ -3082,7 +3651,7 @@ function variantBadgeText(resolved) {
 }
 
 /**
- * 属性面板的变体字段（卡 t_3623451f）。
+ * 属性面板的变体字段。
  *
  * 「有变体的音效」必须能二选一：随机变体（游戏默认，每次随机）或指定变体（固定某一个，
  * 列表就是库里这个事件的全部 ogg —— 不放路径，也不让用户手输）。单变体 / 文件片段
@@ -3139,33 +3708,157 @@ function renderVariantFields(c, EV) {
  * 缩放提示：告诉用户当前视口能看多少秒。
  * 时间轴很长时，用户容易「以为内容没了」，这句提示能避免。
  */
+// 时间轴缩放的真实上下限见文件顶部 STATE 上方（const ZOOM_MIN / ZOOM_MAX）。
+
+/** 缩放的「真话」格式：只用真实值（最多 5 位有效数字去掉浮点尾巴），不做 toFixed(2) 四舍五入。 */
+function fmtZoom(z) {
+  const n = Number(z);
+  if (!Number.isFinite(n) || n <= 0) return '0';
+  return String(Number(n.toPrecision(5)));
+}
+
+/** 一屏能看多少毫秒（只看真实几何：视口宽 / 当前 zoom）。 */
+function viewportMs() {
+  const area = $('scrollArea');
+  return area && STATE.zoom > 0 ? area.clientWidth / STATE.zoom : 0;
+}
+
+/** 把真实 zoom 写回滑杆（滑杆是控件真值的一份镜像，不是另一个真相）。 */
+function syncZoomControl() {
+  const rng = $('rngZoom');
+  if (!rng) return;
+  rng.min = String(ZOOM_MIN);
+  rng.max = String(ZOOM_MAX);
+  rng.step = 'any';
+  if (Number(rng.value) !== STATE.zoom) rng.value = String(STATE.zoom);
+}
+
+/** 缩放相关的状态栏文案（滑杆 / 滚轮 / 加减键共用同一句，避免各写各的）。 */
+function zoomStatusText() {
+  const viewMs = viewportMs();
+  return `缩放 ${fmtZoom(STATE.zoom)} px/ms · 一屏约 ${(viewMs / 1000).toFixed(1)}s`;
+}
+
 function updateZoomFitHint() {
   const el = $('zoomVal');
   if (!el) return;
-  const area = $('scrollArea');
-  const viewMs = area ? area.clientWidth / STATE.zoom : 0;
-  el.textContent = `${STATE.zoom.toFixed(2)} px/ms · 一屏约 ${(viewMs / 1000).toFixed(1)}s`;
+  const viewMs = viewportMs();
+  el.textContent = `${fmtZoom(STATE.zoom)} px/ms · 一屏约 ${(viewMs / 1000).toFixed(1)}s`;
+  // 到最小缩放还铺不满时，给标签一个明确的数据标记（自测 / 读屏 / 样式都读它）
+  const total = totalMs();
+  el.dataset.fitLimited = (STATE.zoom <= ZOOM_MIN + 1e-12 && total > viewMs * 1.01) ? 'min' : '';
 }
 
-/** 缩放到「整段时序刚好铺满视口」 */
+/**
+ * 状态栏那句「缩放 X px/ms · 一屏约 Ns」走这一条入口。
+ *
+ * 为什么单独开一个入口：这句话是**几何读数**（clientWidth ÷ zoom），
+ * 窗口缩放、最大化/还原、拖左右栏抓手都会让它的 N 过期。工具条 #zoomVal
+ * 已经由 setupZoomFitReflow 在三档路径上重算，状态栏却只在「缩放动作」里写一次，
+ * 于是同一时刻两个显示面写着两个秒数（实测工具条 16.2s、状态栏还挂 39.7s）。
+ *
+ * 这里给这句打上「我还会跟着几何自己变」的身份标记：宽度一变，
+ * refreshZoomStatusLine() 就用同一个 zoomStatusText() 原句重写，两处永远同一时刻同一分母。
+ * 一旦状态栏换成别的文案（播放中 / 已打开工程 / 铺不满一屏的长句），身份自动作废，
+ * 不会被 resize 抢回来说缩放的话 —— 长句的既有语义一个字都不动。
+ */
+function showZoomStatus() {
+  status(zoomStatusText());   // 走通用状态栏（顺手清右侧一次性提示、重置其它身份标记）
+  statusShowsZoom = true;     // status() 会把标记清零，所以在这里补回
+}
+
+/** 宽度变了就重写状态栏那句（只在它仍挂在状态栏上时）；右侧路径 / 提示不动 */
+function refreshZoomStatusLine() {
+  if (!statusShowsZoom) return false;
+  setStatusMsgPlain(zoomStatusText());   // 只改左侧原句；title 由 setStatusMsgPlain 同步（长句悬停看全文）
+  return true;
+}
+
+/**
+ * 缩放提示里的「一屏约 Xs」是**几何读数**（scrollArea.clientWidth ÷ zoom），
+ * 只要视口宽度变了它就是旧值 —— 拉窗口、最大化/还原、拖左右栏抓手、
+ * 侧栏折叠都会改这个宽度，而它原来只在「缩放动作」里刷新，于是窗口缩小后
+ * 依然标着放大时的秒数（P2 ：1086 宽实测 66.8s，界面仍写 158.8s）。
+ *
+ * 这里只重算文本与 dataset 标记，不动 STATE.zoom、不动 ZOOM_MIN、不重排布局。
+ * 两条触发路径都接上：
+ *   - window resize（setContentSize / 最大化 / 还原）
+ *   - ResizeObserver 观察 scrollArea（抓手拖动、侧栏变化等不改窗口的路径）
+ * 幂等：重绘会反复调，只装一次监听器。
+ */
+function setupZoomFitReflow() {
+  if (setupZoomFitReflow._done) return 'already';
+  const area = $('scrollArea');
+  if (!area) return 'no-area';
+  setupZoomFitReflow._done = true;
+
+  const refresh = () => {
+    updateZoomFitHint();        // 工具条 #zoomVal
+    refreshZoomStatusLine();    // 底部状态栏那句（同一时刻同一分母）
+  };
+
+  // 窗口缩放：合并到一帧里，避免连续 resize 反复写 DOM
+  let raf = 0;
+  window.addEventListener('resize', () => {
+    if (raf) return;
+    raf = requestAnimationFrame(() => { raf = 0; refresh(); });
+  });
+
+  // 视口宽度本身变了（角落由布局层决定，不一定要过 window resize）
+  if (window.ResizeObserver) {
+    new ResizeObserver(() => refresh()).observe(area);
+  }
+  return 'wired';
+}
+
+/**
+ * 缩放到「整段时序刚好铺满视口」。
+ *
+ * P1：长总长（3600000ms）在最小缩放 0.005 下真实终点仍在
+ * 视口外 22 倍，旧实现却照样报「已缩放到适合窗口：整段 3600.00s」，滑杆还被
+ * min=0.05 顶到 0.05 —— 状态、控件、几何三份真相。现在：
+ *   能铺满 → 真报成功，并给出真实 zoom；
+ *   到最小缩放仍铺不满 → 把缩放设到真实下限（MIN_ZOOM）并明说「不能铺满、一屏多少秒、
+ *                        整段几屏」，绝不假成功。
+ */
 function zoomToFit() {
   const area = $('scrollArea');
-  if (!area) return;
+  if (!area) return null;
   const total = totalMs();
-  if (!total) return;
+  if (!total) return null;
   const pad = 40;                                   // 两侧留白
-  const z = Math.max(0.005, Math.min(2, (area.clientWidth - pad) / total));
+  const avail = Math.max(20, area.clientWidth - pad);
+  const need = avail / total;                       // 整段铺满所需的真实 px/ms
+  const z = clampNum(need, ZOOM_MIN, ZOOM_MAX);
   STATE.zoom = z;
-  const rng = $('rngZoom');
-  if (rng) rng.value = String(z);
-  $('zoomVal').textContent = `${z.toFixed(2)} px/ms`;
+  syncZoomControl();
+  area.scrollLeft = 0;                              // 「适合窗口」就是看整段：从头开始
   renderTimeline();
   updateZoomFitHint();
-  status(`已缩放到适合窗口：整段 ${(total / 1000).toFixed(2)}s`);
+  const viewMs = viewportMs();
+  const totalSec = (total / 1000).toFixed(2);
+  const viewSec = (viewMs / 1000).toFixed(1);
+  if (need < ZOOM_MIN - 1e-12) {
+    const screens = total / viewMs;
+    status(
+      `总长 ${totalSec}s 铺不满一屏：已到最小缩放 ${fmtZoom(ZOOM_MIN)} px/ms，一屏只能看 ${viewSec}s（整段约 ${screens.toFixed(1)} 屏）`,
+      `没有假装已适合：终点仍在右侧可视区外；要整段进一屏，总长需 ≤ ${viewSec}s`
+    );
+    return { fit: false, reason: 'min-zoom', zoom: z, viewMs, screens };
+  }
+  if (need > ZOOM_MAX + 1e-12) {
+    status(
+      `总长 ${totalSec}s 太短：最大缩放 ${fmtZoom(ZOOM_MAX)} px/ms 已超过铺满所需（${fmtZoom(need)} px/ms）`,
+      `整段已在一屏内，剩余空间由两侧留白占着`
+    );
+    return { fit: false, reason: 'max-zoom', zoom: z, viewMs };
+  }
+  status(`已缩放到适合窗口：整段 ${totalSec}s（${fmtZoom(z)} px/ms）`);
+  return { fit: true, zoom: z, viewMs };
 }
 
 // ---------------------------------------------------------------------------
-// 通用撤销 / 重做（卡 t_6b99a1fd）
+// 通用撤销 / 重做
 //
 // 为什么用「文档快照」而不是给每个动作写一份逆操作：
 //   文档是纯 JSON（片段几十个、字段固定），快照的成本可以忽略；而逐动作逆操作要在
@@ -3182,20 +3875,23 @@ function zoomToFit() {
 //   离散动作（删除 / 拆分 / 对齐 / 新建轨道……）→ 每次一步。
 // ---------------------------------------------------------------------------
 const UNDO_LIMIT = 80;                   // 栈上限：每步一份 JSON 快照，80 步足够「手滑了能退回去」
-// 卡 t_c54d031b：'view' 也放进来 —— 角度数字框是一格一格敲的，900ms 内合并成一步，
+// 'view' 也放进来 —— 角度数字框是一格一格敲的，900ms 内合并成一步，
 // 否则「把 Y 从 -32 改成 20」会在撤销栈里留下好几步（拖动走 beginUndoBatch，本来就只有一步）。
 const UNDO_COALESCE = new Set(['param', 'name', 'total', 'view']);   // 可以按时间合并的连续输入类
 const UNDO = { past: [], future: [], lastJson: null, lastAt: 0, lastKind: '' };
+// 撤销「粘贴片段」时要把选中集还原成粘贴前的样子。
+// 只在这一次改动上挂一个待用快照，其它动作的撤销 / 重做语义一点不动。
+let UNDO_PENDING_SEL = null;             // { ids:[clipId], primary:clipId } | null
 // 撤销栈的基准就定在模块初始化这一刻（= 启动时那份空文档）：这样它不依赖 boot() /
 // DOMContentLoaded 里的接线 —— app.js 被多张并行卡同时改，接线行被整文件写覆盖过一次
-// （卡 t_6b99a1fd），少一处被覆盖的面就少一次「看着在、其实没接上」。
+// ，少一处被覆盖的面就少一次「看着在、其实没接上」。
 // 换工程（新建 / 打开）时各调一次 undoReset() 重新定基准。
 let UNDO_BATCH = null;                   // { kind, pushed }：正在进行的连续交互
 let SAVED_JSON = null;                   // 最近一次保存到磁盘时的文档；撤销回这一刻就是「干净」的
 // 注意：这一句必须**放在上面两个 let 之后**。undoReset() 会写 UNDO_BATCH，
 // 而 let 是 TDZ 的：放在声明之前调用会在页面加载时直接抛
 // 「Cannot access 'UNDO_BATCH' before initialization」，整个 app.js 停摆
-// （t_47b9fab2 自测时撞到过：那时 app 连 __MCS_STATE__ 都没挂上）。
+// （自测时撞到过：那时 app 连 __MCS_STATE__ 都没挂上）。
 undoReset();
 
 const UNDO_LABELS = {
@@ -3204,14 +3900,14 @@ const UNDO_LABELS = {
   mute: '静音轨道', solo: '独奏轨道',
   paste: '粘贴片段', split: '拆分片段', align: '对齐到网格', lock: '锁定 / 解锁',
   visual: '导入视觉参考', visualDelete: '移除画面素材', op: '操作',
-  // 卡 t_c54d031b：调整页里转模型 / 改角度 / 缩放 / 位移（撤销时用户要知道撤掉的是「角度」）
+  // 调整页里转模型 / 改角度 / 缩放 / 位移（撤销时用户要知道撤掉的是「角度」）
   view: '调整模型视角',
-  // 卡 t_96cd9241：换动画模式（关键帧 / Molang）与换选中动画也写进工程文件，撤销时说清楚
+  // 换动画模式（关键帧 / Molang）与换选中动画也写进工程文件，撤销时说清楚
   anim: '切换动画',
   animPlay: '切换动画预览方式',
-  // 卡 t_47b9fab2：Alt + 拖边缘 = 非破坏性裁剪（只改源内起止，素材没丢）
+  // Alt + 拖边缘 = 非破坏性裁剪（只改源内起止，素材没丢）
   trim: '非破坏性裁剪',
-  // 卡 t_c4491bba：这三项以前调用点没传 kind，撤销提示一律是含糊的「操作」。
+  // 这三项以前调用点没传 kind，撤销提示一律是含糊的「操作」。
   // 它们都是顶栏设置项（写进 timeline.json），用户需要看状态栏就知道刚才撤掉的是什么。
   bpm: '修改 BPM', grid: '修改网格', snap: '切换吸附',
   // D 键 / 右键「再复制一份」：与「添加片段 / 粘贴片段」区分开，用户才知道撤掉的是哪一步
@@ -3229,6 +3925,7 @@ function undoReset() {
   UNDO.lastAt = 0;
   UNDO.lastKind = '';
   UNDO_BATCH = null;
+  UNDO_PENDING_SEL = null;
 }
 function canUndo() { return UNDO.past.length > 0; }
 function canRedo() { return UNDO.future.length > 0; }
@@ -3245,8 +3942,8 @@ function endUndoBatch() { UNDO_BATCH = null; UNDO.lastKind = ''; UNDO.lastAt = 0
  */
 function commitUndo(kind) {
   const cur = docSnapshot();
-  if (UNDO.lastJson == null) { UNDO.lastJson = cur; return false; }
-  if (cur === UNDO.lastJson) return false;
+  if (UNDO.lastJson == null) { UNDO.lastJson = cur; UNDO_PENDING_SEL = null; return false; }
+  if (cur === UNDO.lastJson) { UNDO_PENDING_SEL = null; return false; }
 
   const k = UNDO_BATCH ? UNDO_BATCH.kind : (kind || 'op');
   const now = perfNow();
@@ -3254,9 +3951,13 @@ function commitUndo(kind) {
     && (now - UNDO.lastAt) < 900;
   const batchDup = !!UNDO_BATCH && UNDO_BATCH.pushed;      // 批内后续改动不再单独入栈
   if (!coalesce && !batchDup) {
-    UNDO.past.push({ json: UNDO.lastJson, kind: k });
+    const entry = { json: UNDO.lastJson, kind: k };
+    // 只有粘贴这一步挂了「粘贴前选中集」，撤销时用它把选中集还原回去
+    if (UNDO_PENDING_SEL) entry.sel = UNDO_PENDING_SEL;
+    UNDO.past.push(entry);
     if (UNDO.past.length > UNDO_LIMIT) UNDO.past.shift();
   }
+  UNDO_PENDING_SEL = null;
   if (UNDO_BATCH) UNDO_BATCH.pushed = true;
   UNDO.lastJson = cur;
   UNDO.lastAt = now;
@@ -3266,7 +3967,7 @@ function commitUndo(kind) {
 }
 
 /**
- * 把「由 STATE.doc 派生的输入框 / 窗口标题」刷成文档当前值（卡 t_26c09aac 第二条）。
+ * 把「由 STATE.doc 派生的输入框 / 窗口标题」刷成文档当前值。
  *
  * 为什么必须有这一步：撤销 / 重做把 STATE.doc 整个换成快照，但这些控件不会自己跟着变 ——
  * 于是界面显示 A、文档其实是 B。而保存时导出读的是输入框（`doc.name = $('eName').value`，
@@ -3285,12 +3986,15 @@ function syncDocInputsFromDoc() {
   updateWindowTitle();
 }
 
-/** 把文档换成快照内容（撤销 / 重做共用），并把选中集里已经不存在的片段剔掉 */
-function applyDocJson(json) {
+/** 把文档换成快照内容（撤销 / 重做共用），并把选中集里已经不存在的片段剔掉
+ *  可选的 sel = { ids, primary } —— 粘贴这一步撤销时用它把选中集还原到粘贴前 */
+function applyDocJson(json, sel) {
   STATE.doc = JSON.parse(json);
   const alive = new Set(STATE.doc.clips.map((c) => c.id));
-  const keep = Array.from(STATE.selectedClipIds).filter((id) => alive.has(id));
-  setSelection(keep, alive.has(STATE.selectedClipId) ? STATE.selectedClipId : null);
+  const want = (sel && Array.isArray(sel.ids)) ? sel.ids : Array.from(STATE.selectedClipIds);
+  const keep = Array.from(new Set(want)).filter((id) => alive.has(id));
+  const wantPrimary = (sel && sel.primary) ? sel.primary : STATE.selectedClipId;
+  setSelection(keep, alive.has(wantPrimary) ? wantPrimary : (keep.length ? keep[keep.length - 1] : null));
   // 撤销后总长可能变短：播放头不能停在时间轴之外
   const t = totalMs();
   if (STATE.playheadMs > t) STATE.playheadMs = t;
@@ -3310,15 +4014,18 @@ function applyDocJson(json) {
   // 撤销后的新状态同步成「脏 / 干净」。而且它不会污染撤销栈：上一句已经把
   // UNDO.lastJson 归位到刚恢复的快照，commitUndo() 立刻 cur === lastJson 返回 false。
   // 顺序要是反了（先 markDirty 再归位），这一步就会在 Ctrl+Z 自己的过程中又压进
-  // 一条撤销步 —— 用户会陷入「撤销撤不回去」的循环（卡 t_c4491bba 顺手核过这里）。
+  // 一条撤销步 —— 用户会陷入「撤销撤不回去」的循环（顺手核过这里）。
 }
 
 function undo() {
   if (!UNDO.past.length) { status('没有可撤销的操作', canRedo() ? 'Ctrl+Y 可以重做' : ''); return 0; }
   const e = UNDO.past.pop();
-  UNDO.future.push({ json: UNDO.lastJson, kind: e.kind });
-  applyDocJson(e.json);
-  status(`已撤销：${UNDO_LABELS[e.kind] || UNDO_LABELS.op}`,
+  // 重做时把「撤销这一刻」的选中集还原回去（粘贴 → 撤销 → 重做 三步要闭环）
+  UNDO.future.push({ json: UNDO.lastJson, kind: e.kind,
+    sel: { ids: Array.from(STATE.selectedClipIds), primary: STATE.selectedClipId } });
+  applyDocJson(e.json, e.sel);
+    syncLiveTrackAudio();        // 撤销可能改回静音/独奏或恢复被删片段：播放中立刻对齐
+    status(`已撤销：${UNDO_LABELS[e.kind] || UNDO_LABELS.op}`,
     UNDO.past.length ? `还能撤销 ${UNDO.past.length} 步` : '已经回到最早的一步之前');
   return 1;
 }
@@ -3326,9 +4033,11 @@ function undo() {
 function redo() {
   if (!UNDO.future.length) { status('没有可重做的操作', canUndo() ? 'Ctrl+Z 可以撤销' : ''); return 0; }
   const e = UNDO.future.pop();
-  UNDO.past.push({ json: UNDO.lastJson, kind: e.kind });
-  applyDocJson(e.json);
-  status(`已重做：${UNDO_LABELS[e.kind] || UNDO_LABELS.op}`,
+  UNDO.past.push({ json: UNDO.lastJson, kind: e.kind,
+    sel: { ids: Array.from(STATE.selectedClipIds), primary: STATE.selectedClipId } });
+  applyDocJson(e.json, e.sel);
+    syncLiveTrackAudio();        // 重做同理：播放中的静音/独奏状态立刻对齐
+    status(`已重做：${UNDO_LABELS[e.kind] || UNDO_LABELS.op}`,
     UNDO.future.length ? `还能重做 ${UNDO.future.length} 步` : '已经是最新的一步');
   return 1;
 }
@@ -3349,8 +4058,30 @@ function setTotalMs(want, opts) {
   const cfg = STATE.doc.config;
   const floor = totalFloorMs();
   const grid = window.MCS.effectiveGridMs(cfg) || 50;
-  const raw = Math.round(Number(want));
-  let v = Number.isFinite(raw) ? raw : cfg.totalMs;
+  // 空串不是「0」：type=number 对非法文本（"NaN" / "-" / 空框）都回给空串，
+  // 若走 Number('') = 0 就会被下限抬成 200ms 并静默改数。
+  // 与下面的非有限值同待遇：一个字节都不写，由调用方恢复显示。
+  if (typeof want === 'string' && want.trim() === '') {
+    return { value: cfg.totalMs, floor, clamped: false, changed: false, rejected: 'notFinite' };
+  }
+  const num = Number(want);
+  // ① 非有限值（空串以外的手滑、Infinity、1e400…）任何来源都不写：
+  //    它不是「一个数」，写进 config 只会把播放边界 / 几何污染成 NaN。
+  if (!Number.isFinite(num)) {
+    return { value: cfg.totalMs, floor, clamped: false, changed: false, rejected: 'notFinite' };
+  }
+  // ② 超上限的**输入框请求**明确拒绝，一个字节都不写。
+  //    以前这里直接写 1e21，接着 renderTimeline 按 1e21 铺刻度 → 渲染进程卡死。
+  //    拖拽 / GIF / 动画这类来源不在这里截断：它们要么是用户持续拖动（自己会停手），
+  //    要么是素材/文件的真实长度 —— 静默截短等于改用户数据。它们的绘制由
+  //    renderTimeline 的预算闸挡住，并如实提示「超出可编辑上限」。
+  if (num > MAX_TOTAL_MS && o.source === 'input') {
+    return {
+      value: cfg.totalMs, floor, clamped: false, changed: false,
+      rejected: 'tooBig', max: MAX_TOTAL_MS,
+    };
+  }
+  let v = Math.round(num);
   if (o.snap !== false && cfg.snapToGrid) v = Math.round(v / grid) * grid;
   const clamped = v < floor;
   if (clamped) v = Math.ceil(floor / grid) * grid;      // 抬到下限之上，且落在网格线上
@@ -3374,7 +4105,7 @@ function setTotalMs(want, opts) {
     }
   }
   if (o.render !== false) { renderTimeline(); if (!o.quiet) revalidate(); }
-  return { value: v, floor, clamped, changed };
+  return { value: v, floor, clamped, changed, overMax: v > MAX_TOTAL_MS };
 }
 
 /**
@@ -3445,7 +4176,7 @@ function bindProps() {
     if (!c) return;
     fn(c);
     // 属性面板的改动统一按 'param' 入撤销栈：同一个字段连续输入（音量 / 音高滑杆、
-    // 备注）在 900ms 内会合并成一步，不会变成「敲一个字撤一次」（卡 t_6b99a1fd）
+    // 备注）在 900ms 内会合并成一步，不会变成「敲一个字撤一次」
     markDirty('param');
     renderTimeline();
     if (!opts || opts.revalidate !== false) revalidate();
@@ -3466,14 +4197,32 @@ function bindProps() {
   $('pLabel').addEventListener('input', (e) => upd((c) => { c.label = e.target.value; }, { revalidate: false }));
   $('pSoundId').addEventListener('input', (e) => upd((c) => { c.soundId = e.target.value; }, { revalidate: false }));
   $('pStart').addEventListener('change', (e) => {
-    // 负数没有意义，NaN 也不能写进文档（否则时间轴会算出奇怪的位置）
-    const raw = Number(e.target.value);
-    const v = Number.isFinite(raw) ? Math.max(0, Math.round(raw)) : 0;
+    const c0 = get();
+    if (!c0) return;
+    // 负数 / 空 / 非数字都是非法提交，必须明确拒绝。
+    // 以前这里静默 Math.max(0, …) 写 0，用户输入 -123 失焦后看到「起始位置 0.000s」，
+    // 会以为工具接受了他的数（片段其实被挪到了开头）。现在：文档保留最后一次有效值，
+    // 输入框回显那个有效值，状态栏把「为什么被拒 + 怎么改」说清楚 —— 不写任何数据。
+    const text = String(e.target.value == null ? '' : e.target.value).trim();
+    const raw = Number(text);
+    if (text === '' || !Number.isFinite(raw) || raw < 0) {
+      const keep = c0.startMs;
+      const why = text === ''
+        ? '不能为空'
+        : (!Number.isFinite(raw) ? '不是有效的数字' : '不能是负数');
+      e.target.value = keep;                    // 回显文档里的有效值，界面与数据不打架
+      statusHint(
+        `起始位置无效：${text === '' ? '(空)' : text} —— ${why}，已保留原值 ${(keep / 1000).toFixed(3)}s`,
+        `请输入 0 或更大的整数（毫秒）；例如 0 或 ${keep}`
+      );
+      return;
+    }
+    const v = Math.round(raw);
     upd((c) => { c.startMs = v; });
     e.target.value = v;                       // 把规整后的值写回输入框，让用户看到实际结果
     status(`起始位置：${(v / 1000).toFixed(3)}s`);
   });
-  // 改时长 = 等比改播放倍速（与拖右边缘完全同一套语义，卡 t_47b9fab2 第 1 条）：
+  // 改时长 = 等比改播放倍速（与拖右边缘完全同一套语义，第 1 条）：
   // 这里不再只是「把条拉长/压短」，否则从面板改和用鼠标拖会得到两种不同的结果。
   $('pDuration').addEventListener('change', (e) => {
     const c0 = get();
@@ -3482,11 +4231,14 @@ function bindProps() {
     const v = Number.isFinite(raw) ? Math.max(MIN_DURATION_MS, Math.round(raw)) : MIN_DURATION_MS;
     const beforeDur = c0.durationMs;
     const beforeRate = rateOf(c0);
+    // 时长变小时淡入淡出会被同步收短 —— 先留快照，状态栏如实播报
+    const beforeFade = { in: Math.max(0, Math.round(c0.fadeInMs || 0)), out: Math.max(0, Math.round(c0.fadeOutMs || 0)) };
     const r = setStretchedDuration(c0, v);
     commit(() => { /* setStretchedDuration 已经改好了 */ }, 'resize');
     e.target.value = c0.durationMs;
     status(`时长：${beforeDur}ms → ${c0.durationMs}ms，播放速度 ${beforeRate.toFixed(2)}x → ${rateOf(c0).toFixed(2)}x（等比变速）`
-      + (r && r.clamped ? '　⚠ 已到 0.25x~4x 倍速上限，声音会提前播完或在条尾被切断' : ''));
+      + (r && r.clamped ? '　⚠ 已到 0.25x~4x 倍速上限，声音会提前播完或在条尾被切断' : '')
+      + fadeClampText(beforeFade.in, beforeFade.out, c0));
   });
 
   // ---- 裁剪：源内起止（非破坏性，素材不丢）----
@@ -3499,13 +4251,16 @@ function bindProps() {
       const raw = Number(e.target.value);
       const want = Number.isFinite(raw) ? Math.max(0, Math.round(raw)) : 0;
       const cur = Math.max(0, c0.offsetMs || 0);
+      // 裁头会把条长改小 → 淡入淡出同步收短，状态栏要如实说
+      const fadeBefore = { in: Math.max(0, Math.round(c0.fadeInMs || 0)), out: Math.max(0, Math.round(c0.fadeOutMs || 0)) };
       const r = setTrimmedHead(c0, Math.round((want - cur) / rate));
       commit(() => { /* setTrimmedHead 已经改好了 */ }, 'trim');
       e.target.value = Math.max(0, c0.offsetMs || 0);
       status(`裁剪起点：源内 ${cur}ms → ${Math.max(0, c0.offsetMs || 0)}ms`
         + `（片段 ${(c0.startMs / 1000).toFixed(3)}s 起，末尾不动）`
         + (r && r.hitStart ? '　⚠ 已到源音频开头，不能再往前' : '')
-        + (r && r.hitMin ? '　⚠ 片段长度已到最小值' : ''));
+        + (r && r.hitMin ? '　⚠ 片段长度已到最小值' : '')
+        + fadeClampText(fadeBefore.in, fadeBefore.out, c0));
     });
   }
   //   改「裁剪终点」= 条长跟着素材走（倍速不变）；填到源音频结尾即恢复完整素材
@@ -3520,14 +4275,18 @@ function bindProps() {
         ? Math.min(Math.max(Math.round(raw), inMs + 1), total)
         : total;
       const rate = rateOf(c0);
+      // 裁剪终点往前推 = 条长变短 → 淡入淡出同步收短（同一套 normalizeFades）
+      const fadeBefore = { in: Math.max(0, Math.round(c0.fadeInMs || 0)), out: Math.max(0, Math.round(c0.fadeOutMs || 0)) };
       commit((c) => {
         if (c.srcDurMs == null) c.srcDurMs = total;    // 钉住「最远能恢复到哪儿」
         c.srcEndMs = want >= total ? null : want;
         c.durationMs = Math.max(MIN_DURATION_MS, Math.round((want - inMs) / rate));
+        normalizeFades(c);
       }, 'trim');
       e.target.value = c0.srcEndMs != null ? c0.srcEndMs : total;
       status(`裁剪终点：源内 ${want}ms（源音频共 ${total}ms）—— 片段长度 ${c0.durationMs}ms，倍速不变 ${rate.toFixed(2)}x`
-        + (want >= total ? '，已是完整素材' : '，拖右边缘可恢复'));
+        + (want >= total ? '，已是完整素材' : '，拖右边缘可恢复')
+        + fadeClampText(fadeBefore.in, fadeBefore.out, c0));
     });
   }
 
@@ -3543,21 +4302,46 @@ function bindProps() {
       status(`效果预设：${r.label} —— 淡入 ${r.inMs}ms / 淡出 ${r.outMs}ms`);
     });
   }
+  // 淡入淡出编辑的状态栏反馈。
+  //   - 判定基准 = 「本次请求值」v，不是「编辑前旧值」。旧实现拿 before 快照跟落盘值比，
+  //     只要用户确实改了值就恒为 true，于是 0→37、290→10 这类合法编辑也报「已自动收短」。
+  //   - normalizeFades（timeline.js）是 fin=min(fin,dur)、fout=min(fout,dur-fin)：编辑淡入会把
+  //     淡出压短（反向同理），这条交叉钳制旧实现一字不提 —— 现在明确写出被压的是哪一侧、前后值。
+  //   - 状态栏数值一律读落盘后的真实值（commit 之后从 c0 再取），不再读 before 快照。
+  //   - 只改提示逻辑；normalizeFades 的收短语义与落盘数值不变。
   const onFadeEdit = (which) => (e) => {
     const c0 = get();
     if (!c0) return;
     const raw = Number(e.target.value);
     const v = Number.isFinite(raw) ? Math.max(0, Math.round(raw)) : 0;
     const before = { in: Math.max(0, c0.fadeInMs || 0), out: Math.max(0, c0.fadeOutMs || 0) };
+    const selfSide = which === 'in' ? 'in' : 'out';
+    const otherSide = which === 'in' ? 'out' : 'in';
+    const label = which === 'in' ? '淡入' : '淡出';
+    const otherLabel = which === 'in' ? '淡出' : '淡入';
     commit((c) => {
       if (which === 'in') c.fadeInMs = v; else c.fadeOutMs = v;
       // 淡入 + 淡出不得超过条长：超了就把值收短（并如实写在状态栏里）
       normalizeFades(c);
       c.fadePreset = matchFadePreset(c);
     }, 'param');
-    const clamped = which === 'in' ? before.in !== c0.fadeInMs : before.out !== c0.fadeOutMs;
-    status(`淡入 ${c0.fadeInMs}ms / 淡出 ${c0.fadeOutMs}ms`
-      + (clamped ? `　⚠ 两者之和不能超过片段长度 ${c0.durationMs}ms，已自动收短` : ''));
+    const got = {
+      in: Math.max(0, Math.round(c0.fadeInMs || 0)),
+      out: Math.max(0, Math.round(c0.fadeOutMs || 0)),
+    };
+    const notes = [];
+    // 自身被收短：基准是本次请求值 v（不是旧值），落盘值 !== v 才算
+    if (got[selfSide] !== v) {
+      notes.push(`${label} ${v}ms 超过可用上限，已收短为 ${got[selfSide]}ms`);
+    }
+    // 交叉钳制：另一侧被本次编辑压短（或回让），把被压的是哪一侧和前后值写清楚
+    if (got[otherSide] !== before[otherSide]) {
+      notes.push(`${otherLabel}从 ${before[otherSide]}ms 被压到 ${got[otherSide]}ms（给${label}让位）`);
+    }
+    status(`淡入 ${got.in}ms / 淡出 ${got.out}ms`
+      + (notes.length
+        ? `　⚠ 两者之和不能超过片段长度 ${c0.durationMs}ms，已自动收短：${notes.join('；')}`
+        : ''));
   };
   if ($('pFadeIn')) $('pFadeIn').addEventListener('change', onFadeEdit('in'));
   if ($('pFadeOut')) $('pFadeOut').addEventListener('change', onFadeEdit('out'));
@@ -3582,7 +4366,7 @@ function bindProps() {
   });
   $('pNote').addEventListener('input', (e) => upd((c) => { c.note = e.target.value; }, { revalidate: false }));
   $('pTrack').addEventListener('change', (e) => upd((c) => { c.track = e.target.value; }));
-  // 变体（卡 t_3623451f）：随机 / 指定两种模式 + 指定时列出库里的全部变体。
+  // 变体：随机 / 指定两种模式 + 指定时列出库里的全部变体。
   // 用 commit（带 renderProps）而不是 upd：切模式后「指定哪一个」那个下拉要跟着
   // 启用 / 禁用、提示要跟着换，否则用户会面对一个看起来没反应的控件。
   $('pVariant').addEventListener('change', (e) => commit((c) => {
@@ -3608,7 +4392,7 @@ function bindProps() {
       return;
     }
     // 变体自带的音量 / 音高必须一起生效 —— 时间轴播放就是这么算的（audio.js），
-    // 试听少乘一次就会出现「试听听起来和播放不一样」（卡 t_3623451f）
+    // 试听少乘一次就会出现「试听听起来和播放不一样」
     const vol = (c.volume != null ? c.volume : 1) * (resolved.volume != null ? resolved.volume : 1);
     const pit = (c.pitch != null ? c.pitch : 1) * (resolved.pitch != null ? resolved.pitch : 1);
     const h = await tryAudition(resolved.absPath, {
@@ -3674,12 +4458,12 @@ window.__MCS_ADD_CUSTOM__ = async (absPath, startMs, trackName) => {
     kind: 'file',
     startMs,
     durationMs: dur,
-    srcDurMs: dur,   // 源音频自然长度：非破坏性裁剪「最远能拖回哪儿」的边界（卡 t_47b9fab2）
+    srcDurMs: dur,   // 源音频自然长度：非破坏性裁剪「最远能拖回哪儿」的边界
     track: trackName || STATE.doc.tracks[0].name,
   });
   STATE.doc.clips.push(clip);
   setSelection([clip.id], clip.id);
-  markDirty('add');        // 卡 t_c4491bba：带 kind（测试钩子走的是真实加片段路径）
+  markDirty('add');        // 带 kind（测试钩子走的是真实加片段路径）
   renderTimeline(); renderProps(); revalidate();
   return { id: clip.id, durationMs: dur };
 };
@@ -3728,6 +4512,11 @@ function revalidate() {
       });
     }
   }
+
+  // 导入时留下的单条提示：parsers.js 空模型诊断写着「导入后右侧
+  // 「校验」页也会留一条同样的提示」，以前那是假话 —— 现在真的存在这里、并在其它
+  // 检查全部算完之后合进来，既有条目的文字与顺序一律不动。
+  if (Array.isArray(STATE.importWarnings)) issues.push(...STATE.importWarnings);
 
   STATE.issues = issues;
   const errs = issues.filter((i) => i.level === 'error').length;
@@ -3826,7 +4615,7 @@ async function importGif(filePath, opts) {
         const player = window.MCS_GIF.createPlayer(gif, (i) => rend.renderTo(i));
 
         STATE.gifPlayer = player;
-        STATE.gifRenderer = rend;          // 切回 GIF 时要按 GIF 尺寸重画（卡 t_fa17801d）
+        STATE.gifRenderer = rend;          // 切回 GIF 时要按 GIF 尺寸重画
         STATE.gifAnim = gif;
         STATE.gifFrames = gif.frames;
         STATE.gifNativeMs = gif.totalMs;
@@ -3851,8 +4640,10 @@ async function importGif(filePath, opts) {
         // 只在没有任何片段时才自动设，避免覆盖用户已经排好的内容。
         const newTotal = Math.ceil(gif.totalMs / 100) * 100;
         let totalChanged = false;
-        // 总长的初值跟着 GIF 走（卡 t_6b99a1fd）；但用户如果**已经亲手设过**总长
+        // 总长的初值跟着 GIF 走；但用户如果**已经亲手设过**总长
         // （改过输入框 / 拖过边界条），就绝不再覆盖他 —— 那正是「用户可修改总长」的语义。
+        // GIF 自己的时长照写，超可编辑上限也**不截短**（那是素材真实长度，
+        // 静默改小等于丢信息），只在下面的状态栏里如实说明。
         if (!restoring && STATE.doc.clips.length === 0 && !STATE.totalTouched
             && STATE.doc.config.totalMs !== newTotal) {
           STATE.doc.config.totalMs = newTotal;
@@ -3863,7 +4654,10 @@ async function importGif(filePath, opts) {
         if (!restoring) {
           status(
             `已导入 GIF：${gif.frameCount} 帧 / ${(gif.totalMs / 1000).toFixed(2)}s` +
-              (totalChanged ? `，总长已设为 ${newTotal}ms` : ''),
+              (totalChanged
+                ? `，总长已设为 ${newTotal}ms`
+                  + (newTotal > MAX_TOTAL_MS ? `（超出本版本可编辑上限 ${MAX_TOTAL_MS}ms，原值保留）` : '')
+                : ''),
             '暂停时 GIF 会一起定格，拖动标尺可前后查看任意进度'
           );
         }
@@ -3945,11 +4739,30 @@ async function importVideo(filePath, opts) {
   renderTimeline();
 }
 
-/** 静态图片：只作为参考图显示，不参与同步 */
+/**
+ * 静态图片：只作为参考图显示，不参与同步
+ *
+ * read-binary-file 返回 ok 只说明「字节读到了」，不代表它是能显示的图。
+ * 文本冒名 .png 时 <img> 会 complete=true 但 naturalWidth/Height=0（破图），
+ * 以前这里直接写文档 + 报「已导入参考图」，用户会以为参考素材成功。
+ * 现在先在离屏 Image 上真的解码成功，才改文档 / 换预览；
+ * 失败时原文档、原参考图、已有片段一概不动，并把「哪份文件 + 为什么 + 怎么恢复」写清楚。
+ */
 async function importStillImage(filePath, opts) {
   const o = opts || {};
+  const restoring = !!o.restore;      // 恢复工程：只重建画面，不算新导入、不标脏
   const r = await window.mcs.readBinaryFile(filePath);
-  if (!r.ok) { status('读取失败：' + r.error); return; }
+  if (!r.ok || !r.dataUrl) {
+    stillImageFailure(filePath,
+      r.ok ? '读取结果里没有图片数据' : `读不到文件（${r.error || '未知错误'}）`, restoring, !!o.silent);
+    return;
+  }
+
+  const decoded = await decodeImageDataUrl(r.dataUrl);
+  if (!decoded.ok) {
+    stillImageFailure(filePath, decoded.reason, restoring, !!o.silent);
+    return;
+  }
 
   const img = $('previewGif');
   const canvas = $('previewCanvas');
@@ -3957,23 +4770,106 @@ async function importStillImage(filePath, opts) {
   canvas.style.display = 'none';
   video.style.display = 'none';
   img.style.display = 'block';
-
   img.src = r.dataUrl;
-  STATE.doc.visual.kind = 'image';
-  STATE.doc.visual.path = filePath;
-  STATE.doc.visual.mediaPath = filePath;
+
+  // 恢复工程时文档里本来就是这份引用：只重建预览，不写文档、不标脏
+  // （与 importGif 的 restore 语义一致；否则「打开工程」会凭空亮一个未保存标记，
+  //  保存时还会把旧路径再写一遍 —— 那正是「静默改写原工程」）。
+  if (!restoring) {
+    STATE.doc.visual.kind = 'image';
+    STATE.doc.visual.path = filePath;
+    STATE.doc.visual.mediaPath = filePath;
+    markDirty('visual');          // 图片也是文档里的素材槽
+  }
   STATE.gifPlayer = null;
   STATE.gifRenderer = null;
   STATE.gifAnim = null;
   STATE.visualMode = 'image';
   updateVisualSwitchButton();
-  markDirty('visual');          // 同上：图片也是文档里的素材槽
+  // 这张图现在能正常打开了：之前那条「参考图打不开」的问题记录已经过期
+  const staleIssues = STATE.assetIssues.filter((i) => i.fromVisual).length;
+  STATE.assetIssues = STATE.assetIssues.filter((i) => !i.fromVisual);
 
   $('previewEmpty').style.display = 'none';
-  $('metaVisual').textContent = '视觉：图片（不参与进度同步）';
-  status('已导入参考图', '图片不参与时间同步，只作为画面参考');
-  landOnAdjust(o);
+  $('metaVisual').textContent =
+    `视觉：图片（不参与进度同步）` + (decoded.width ? ` · ${decoded.width}×${decoded.height}` : '');
+  if (!restoring) {
+    status('已导入参考图', `图片不参与时间同步，只作为画面参考（${decoded.width}×${decoded.height}）`);
+    landOnAdjust(o);
+  } else if (staleIssues) {
+    revalidate();
+  }
   renderTimeline();
+}
+
+/**
+ * 在离屏 Image 上真正解码一份图片 dataUrl。
+ * 只有 onload 且宽高都大于 0 才算成功 —— 这正是破图（complete=true, naturalWidth=0）的判据。
+ */
+function decodeImageDataUrl(dataUrl) {
+  return new Promise((resolve) => {
+    const im = new Image();
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      im.onload = null;
+      im.onerror = null;
+      clearTimeout(timer);
+      resolve(result);
+    };
+    const timer = setTimeout(() => finish({
+      ok: false,
+      reason: '图片解码超时（6 秒内没有画出任何像素）',
+    }), 6000);
+    im.onload = () => {
+      if (im.naturalWidth > 0 && im.naturalHeight > 0) {
+        finish({ ok: true, width: im.naturalWidth, height: im.naturalHeight });
+      } else {
+        finish({ ok: false, reason: '图片解码后宽高是 0×0（文件是空的或已损坏）' });
+      }
+    };
+    im.onerror = () => finish({
+      ok: false,
+      reason: '图片解码失败（文件已损坏，或扩展名和真实格式不符）',
+    });
+    try {
+      im.src = dataUrl;
+    } catch (e) {
+      finish({ ok: false, reason: '图片地址无法使用（' + (e && e.message ? e.message : String(e)) + '）' });
+    }
+  });
+}
+
+/**
+ * 参考图导入 / 恢复失败时的统一反馈。
+ * 铁律：不写文档、不动已有预览、不报成功；把素材路径、原因、恢复动作都摆出来。
+ *   · 用户主动导入 → 状态栏说明，已有参考图保持不变，用户可直接改选另一张；
+ *   · 打开工程恢复 → 上面那条会被「已打开工程」盖住，所以同时记一条问题面板记录，
+ *     并把 metaVisual 改成「参考图打不开」，别让界面残留「视觉：图片」的假象。
+ */
+function stillImageFailure(filePath, reason, restoring, silent) {
+  const name = baseName(filePath);
+  if (restoring) {
+    STATE.assetIssues = STATE.assetIssues.filter((i) => !i.fromVisual);
+    STATE.assetIssues.push({
+      level: 'warn',
+      fromVisual: true,
+      message: `工程里记的参考图「${filePath}」现在显示不了（${reason}）—— 预览区没有画面参考，`
+        + '时间轴里的片段与备注不受影响；重新导入一张图片就能恢复。',
+    });
+    revalidate();
+    $('metaVisual').textContent = '视觉：参考图打不开';
+    // silent = 撤销/重做这类后台重建：不能说「已打开工程」，那会骗人
+    status(silent
+      ? `参考图「${name}」打不开：${reason}`
+      : `已打开工程，但参考图「${name}」打不开：${reason}`,
+      `素材：${filePath} —— 点「导入图片」重新选一张；已有片段不会受影响`);
+  } else {
+    status(`参考图导入失败：${name} —— ${reason}`,
+      `素材：${filePath} —— 请重新选择一张能打开的 PNG / JPG；原有参考图和工程内容保持不变`);
+  }
+  return false;
 }
 
 /** 把本地路径转成 file:// URL（Windows 盘符要补前导斜杠） */
@@ -3987,7 +4883,7 @@ async function importBBModel(filePath, opts) {
   const o = opts || {};
   const r = await window.mcs.readTextFile(filePath);
   if (!r.ok) {
-    // 读不到文件也是「导入失败」，同样给能看懂的诊断（卡 t_fa17801d）
+    // 读不到文件也是「导入失败」，同样给能看懂的诊断
     showImportDiagnosis(MCS_PARSERS.diagnoseModelFile(null, r.error, filePath));
     status('模型读取失败', filePath);
     return;
@@ -4010,6 +4906,17 @@ async function importBBModel(filePath, opts) {
   const structDiag = MCS_PARSERS.diagnoseModelFile(r.content, null, filePath);
   if (structDiag) {
     // 语法没问题，但结构根本不是模型（导错按钮 / 纯贴图工程 / 无关 JSON）
+    // 空模型分支在 parsers.js 里承诺「导入后右侧「校验」页也会留一条
+    // 同样的提示」—— 这里真的把它记下来（后缀取真实文件名，不写死别的扩展名），
+    // 然后立刻 revalidate，弹窗关掉就能在校验页看到同一条。
+    if (structDiag.emptyModel === true) {
+      const ext = (String(filePath || '').match(/\.[^./\\]+$/) || ['.bbmodel'])[0];
+      STATE.importWarnings = [{
+        level: 'warn',
+        message: `这个 ${ext} 里没有模型（无元素、无骨骼），画布不会有内容`,
+      }];
+      revalidate();
+    }
     showImportDiagnosis(structDiag);
     status(structDiag.title, filePath);
     return;
@@ -4018,7 +4925,7 @@ async function importBBModel(filePath, opts) {
   try {
     STATE.bbInfo = bbInfo;
 
-    // ---- 真的画到预览画布上（本卡的核心：不许只停在"解析成功"）----
+    // ---- 真的画到预览画布上（这一步的核心：不许只停在"解析成功"）----
     const mv = await MCS_MODELPREVIEW.loadModelText(r.content, filePath);
 
     const lines = mv.report.slice();
@@ -4037,6 +4944,9 @@ async function importBBModel(filePath, opts) {
     // 空模型要明确警告：Blockbench 的 image/贴图工程本来就没有元素，
     // 静默接受会让用户以为导入失败却又找不到原因
     const isEmptyModel = STATE.bbInfo.elementCount === 0 && STATE.bbInfo.groupCount === 0;
+    // 真的把带几何体的模型画出来了 —— 上一轮空模型留下的那条提示必须清掉，
+    // 否则它会一直挂在校验页上骗人（旧提示残留）。
+    if (!isEmptyModel) STATE.importWarnings = [];
     if (isEmptyModel) {
       lines.push('');
       lines.push('⚠️ 这个模型里没有任何元素和骨骼。');
@@ -4105,7 +5015,7 @@ async function importBBModel(filePath, opts) {
     if (!isEmptyModel) updateVisualSwitchButton();
     markDirty('visual');        // 同上：模型路径也写进工程文件
     revalidate();
-    // 模型自带动画刚登记进目录（卡 t_96cd9241）：刷两档列表 + 对齐选中态。
+    // 模型自带动画刚登记进目录：刷两档列表 + 对齐选中态。
     // persist:false —— 导入模型不自动替用户选动画（画布仍按静止姿态），列表列在那里由用户点。
     // 但工程文件里本来记着 animName 的话，这里会照着它把那条选回来（重开工程 / 撤销重做）。
     reconcileAnimSelection({ persist: false });
@@ -4117,7 +5027,7 @@ async function importBBModel(filePath, opts) {
 }
 
 /**
- * silent 恢复路径的失败处理（卡 t_96cd9241）：
+ * silent 恢复路径的失败处理：
  * 重开工程时「工程里记的那份 .animation.json 读不到 / 不是动画文件」不许弹诊断弹窗
  * （规格 §4 对模型报告弹窗的同一条规定），改成状态栏一句话 + 一条可查的问题记录。
  * 弹窗只留给用户主动导入时用。
@@ -4138,7 +5048,7 @@ async function importAnimation(filePath, opts) {
   const o = opts || {};
   const r = await window.mcs.readTextFile(filePath);
   if (!r.ok) {
-    // 读不到文件：同样给能看懂的诊断（卡 t_fa17801d）；恢复路径只说话不弹窗
+    // 读不到文件：同样给能看懂的诊断；恢复路径只说话不弹窗
     const diag = MCS_PARSERS.diagnoseAnimationFile(null, r.error, filePath);
     if (o.silent) { animRestoreFailure(diag, filePath, r.error || '读不到文件'); return; }
     showImportDiagnosis(diag);
@@ -4185,11 +5095,11 @@ async function importAnimation(filePath, opts) {
       lines.push('建议：回 Blockbench 里检查这些关键帧并重新输入数值。');
     }
 
-    // ---- 动画 → 预览画布（卡 t_fa17801d 核心之一）----
+    // ---- 动画 → 预览画布（核心之一）----
     // 以前这里只「解析出时长和骨骼名」，画布什么都不变；现在把动画变成可采样的
     // 轨道，按播放头时刻套到画布上的模型上。
     const mv = MCS_MODELPREVIEW.loadAnimationText(r.content, filePath);
-    // 指定选中哪一条（卡 t_96cd9241 的恢复路径用；不指定就是老行为「最长那条」）
+    // 指定选中哪一条（的恢复路径用；不指定就是老行为「最长那条」）
     if (o.selectName) {
       const want = MCS_MODELPREVIEW.find(o.selectName, filePath);
       if (want) MCS_MODELPREVIEW.select(want);
@@ -4210,7 +5120,7 @@ async function importAnimation(filePath, opts) {
     // 把最长动画的长度设为时间轴总长。
     // 只写 config.totalMs（顶栏那个数），**不再写 visual.naturalMs** ——
     // 以前 naturalMs 优先级高于顶栏的「总长(ms)」，导入一次动画后用户再改总长就没反应了
-    // （播放边界 / 时间显示 / 灰尾几何全都还按素材时长算，卡 t_6b99a1fd）。
+    // （播放边界 / 时间显示 / 灰尾几何全都还按素材时长算）。
     // 素材自身长度只作为动画列表里的展示，不参与边界计算。
     if (!o.silent && STATE.animInfos.length) {
       const longest = STATE.animInfos.reduce((a, b) => (a.lengthMs > b.lengthMs ? a : b));
@@ -4218,7 +5128,13 @@ async function importAnimation(filePath, opts) {
       STATE.doc.visual.animFile = filePath;
       if (longest.lengthMs > STATE.doc.config.totalMs) {
         // snap:false —— 素材天然长度不吸附网格（对齐动画本来就该精确）
-        setTotalMs(longest.lengthMs, { source: 'anim', snap: false, quiet: true });
+        // 动画的天然长度照写，绝不因为「超过本版本可编辑上限」就静默截短；
+        // 超上限时只由状态栏如实说明（绘制由 renderTimeline 的预算闸兜住）。
+        const rAnim = setTotalMs(longest.lengthMs, { source: 'anim', snap: false, quiet: true });
+        if (rAnim.overMax) {
+          status(`动画最长 ${(longest.lengthMs / 1000).toFixed(2)}s 超出本版本可编辑上限 ${MAX_TOTAL_MS}ms`,
+            '总长已按素材原长度写入（数据没被改写）；编辑框里只能改成上限以内的数');
+        }
       }
       $('metaDuration').textContent = `总时长：${longest.lengthMs}ms`;
     }
@@ -4248,7 +5164,7 @@ async function importAnimation(filePath, opts) {
 
     renderTimeline();
     revalidate();
-    // 两档列表 / 画布选中态对齐（卡 t_96cd9241）。persist:false —— 非 silent 路径上面
+    // 两档列表 / 画布选中态对齐。persist:false —— 非 silent 路径上面
     // 已经写过 animName/animFile，silent 路径本来就不许写文件。
     reconcileAnimSelection({ persist: false });
     if (o.silent) return { ok: true, anims: STATE.animInfos.length };
@@ -4276,18 +5192,129 @@ async function importAnimation(filePath, opts) {
 // ---------------------------------------------------------------------------
 let modalContent = '';
 let modalName = 'export.txt';
+// 弹窗的焦点记忆（界面设计规范 §四：Esc 关闭、关闭后还焦点；实测）。
+// 以前打开弹窗不把焦点放进去、关闭也不还，键盘用户按 Esc 后焦点就「掉在地上」。
+let MODAL_OPENER = null;
+
+/**
+ * 显示弹窗壳：记录触发者 → 显示 → 把焦点放到「关闭」按钮上（Tab 能继续在弹窗内走）。
+ * @param {Element} [opener] 调用方明确告知的触发者（鼠标点 / 键盘激活的控件）。
+ *   状态栏帮助入口以前是 div onclick，activeElement 是 BODY，
+ *   记不到触发者；现在入口是 <button>，这里也接受显式触发者，焦点关闭后必然回得去。
+ */
+function openModalPanel(opener) {
+  const modal = $('modal');
+  if (!modal) return false;
+  if (getComputedStyle(modal).display === 'none') {
+    if (opener && opener.isConnected && typeof opener.focus === 'function') {
+      MODAL_OPENER = opener;
+    } else {
+      const ae = document.activeElement;
+      MODAL_OPENER = (ae && ae !== document.body && ae !== document.documentElement) ? ae : null;
+    }
+  }
+  modal.style.display = 'flex';
+  const close = $('btnCloseModal');
+  if (close && typeof close.focus === 'function') {
+    try { close.focus({ preventScroll: true }); } catch (e) { close.focus(); }
+  }
+  return true;
+}
+
+/** 这个元素此刻能不能安全接收焦点（还在文档里、没被藏起来、没被禁用）。 */
+function canReturnFocus(el) {
+  if (!el || !el.isConnected || typeof el.focus !== 'function') return false;
+  if (el.disabled) return false;
+  if (el.hidden || (el.closest && el.closest('[hidden]'))) return false;
+  const cs = getComputedStyle(el);
+  if (cs.display === 'none' || cs.visibility === 'hidden') return false;
+  const ti = el.getAttribute('tabindex');
+  if (ti !== null && Number(ti) < 0) return false;
+  return true;
+}
+
+/**
+ * 关闭弹窗并把焦点还给打开它的那个控件。
+ * 触发者如果已经不在了（例如音频修好后状态栏帮助入口自动收起），退到状态栏的
+ * 常驻按钮「恢复默认布局」——绝不把焦点丢回 BODY，否则下一次 Tab 会从整页开头重来。
+ */
+function closeModal() {
+  const modal = $('modal');
+  if (modal) modal.style.display = 'none';
+  const op = MODAL_OPENER;
+  MODAL_OPENER = null;
+  if (canReturnFocus(op)) {
+    try { op.focus({ preventScroll: true }); } catch (e) { op.focus(); }
+    return;
+  }
+  if (op) {
+    // 记过触发者、但它现在不可聚焦：说明这次失败/缺失状态已经消失，入口按设计收起了。
+    // 不能留一个「已经不存在的引用」硬塞焦点，也不能让焦点掉到 document.body。
+    const fallback = $('btnResetLayout');
+    if (canReturnFocus(fallback)) {
+      try { fallback.focus({ preventScroll: true }); } catch (e) { fallback.focus(); }
+    }
+  }
+}
+
+// ---- 弹窗的键盘隔离 + 焦点陷阱 -------------------------------
+// 证实了两条 P1：
+//   其一：弹窗打开、焦点在「关闭」上按 Right，背景播放头 2852 → 2902；
+//   其二：从「关闭」按 Tab，焦点直接跑到背景工具栏（新建/打开/保存…），
+//          用户以为在弹窗里操作，实际点的是被盖住的编辑器。
+// 弹窗是盖住整页的模态层，所以：弹窗打开期间背景快捷键全不吃，
+// Tab / Shift+Tab 只在弹窗里「可见且可用」的控件之间循环，Esc 关闭并还焦点。
+// 只拦快捷键与 Tab 焦点导航，**不**拦普通按键 —— 弹窗里的输入框照样能打字。
+
+/** 弹窗此刻是否真的显示着（openModalPanel 用 display:flex 打开）。 */
+function isModalShown() {
+  const m = $('modal');
+  return !!(m && getComputedStyle(m).display !== 'none');
+}
+
+/** 弹窗面板里可见、可用、真的能 Tab 到的控件（按文档顺序 = Tab 顺序）。 */
+function modalFocusables(modal) {
+  const panel = (modal && modal.querySelector('.modal')) || modal;
+  if (!panel) return [];
+  return Array.from(panel.querySelectorAll('button, [href], input, select, textarea, [tabindex]'))
+    .filter((el) => {
+      if (el.disabled) return false;
+      if (el.getAttribute('aria-hidden') === 'true') return false;
+      const ti = el.getAttribute('tabindex');
+      if (ti !== null && Number(ti) < 0) return false;   // roving / 程序控制的控件不参与
+      const cs = getComputedStyle(el);
+      if (cs.display === 'none' || cs.visibility === 'hidden') return false;
+      return el.getClientRects().length > 0;             // 被 CSS 藏起来的按钮不算
+    });
+}
+
+/**
+ * 把 Tab / Shift+Tab 关在弹窗内。
+ * 第一个控件 Shift+Tab → 最后一个；最后一个 Tab → 第一个（首尾相接）。
+ * 焦点若已被移出弹窗（例如脚本或鼠标点了非控件区域），下一次 Tab 拉回边界。
+ */
+function trapModalFocus(e, modal) {
+  const items = modalFocusables(modal);
+  if (!items.length) { e.preventDefault(); return false; }
+  const idx = items.indexOf(document.activeElement);
+  const next = idx < 0
+    ? items[e.shiftKey ? items.length - 1 : 0]
+    : items[(idx + (e.shiftKey ? -1 : 1) + items.length) % items.length];
+  e.preventDefault();
+  try { next.focus({ preventScroll: true }); } catch (err) { next.focus(); }
+  return true;
+}
 
 function openModal(title, content, saveName) {
   $('modalTitle').textContent = title;
   $('modalBody').textContent = content;
   modalContent = content;
   if (saveName) modalName = saveName;
-  $('modal').style.display = 'flex';
+  openModalPanel();
 }
-function closeModal() { $('modal').style.display = 'none'; }
 
 /**
- * 统一的「导入失败」呈现（卡 t_fa17801d）。
+ * 统一的「导入失败」呈现。
  * 以前这里只丢 `String(e.stack)`，用户看到的是
  * 「Unexpected token '，' ... is not valid JSON」这种开发者文案；
  * 现在弹窗标题直接说明是什么问题，正文给「位置 / 可能原因 / 怎么办」。
@@ -4305,10 +5332,10 @@ function showImportDiagnosis(diag) {
  * 目标：让用户一眼看懂「为什么没声音」+「该把文件夹放哪」，
  * 而不是丢一段路径让他自己找。
  */
-function openAudioHelpModal() {
+function openAudioHelpModal(opener) {
   const as = STATE.audioMissing || {};
   // 运行中音频才被删/被移走时 STATE.audioMissing 是空的（加载库那一刻还是好的），
-  // 这时用「上次成功加载记住的目录」把路径补上，别给用户一个空框（卡 t_8c74ddef）。
+  // 这时用「上次成功加载记住的目录」把路径补上，别给用户一个空框。
   const dir = as.dir || STATE.audioDir || '';
   const reason = as.reason === 'empty-dir'
     ? '找到了音频文件夹，但里面没有 .ogg 文件。'
@@ -4348,7 +5375,7 @@ function openAudioHelpModal() {
       提示：音频目录里的子文件夹结构要保持原样，程序会自动在里面递归查找。
     </p>
   `;
-  $('modal').style.display = 'flex';
+  openModalPanel(opener);      // 记录触发者（状态栏帮助按钮）+ 把焦点放进弹窗（关闭时再还回去）
 
   const copyBtn = $('btnCopyAudioDir');
   if (copyBtn) copyBtn.onclick = async () => {
@@ -4385,7 +5412,7 @@ function openAudioHelpModal() {
  * 一边操作主界面，不用先把弹窗关掉。
  *
  * 万一教程窗口打不开（极端情况），退回下面那份内置弹窗版说明：
- * 「Help 不得为空」这条底线任何时候都要成立（卡 t_7ee2bf5b）。
+ * 「Help 不得为空」这条底线任何时候都要成立。
  */
 async function showHelp() {
   if (window.mcs && typeof window.mcs.openHelp === 'function') {
@@ -4452,7 +5479,7 @@ function openHelpModalFallback() {
 <tr><td style="padding:3px 10px 3px 0"><kbd>Home</kbd> / <kbd>End</kbd></td><td>跳到开头 / 结尾</td></tr>
 <tr><td style="padding:3px 10px 3px 0"><kbd>Del</kbd></td><td>删除选中的<b>全部</b>片段（多选时一起删）</td></tr>
 <tr><td style="padding:3px 10px 3px 0"><kbd>Ctrl</kbd>+<kbd>C</kbd></td><td>复制选中的片段（可多个）</td></tr>
-<tr><td style="padding:3px 10px 3px 0"><kbd>Ctrl</kbd>+<kbd>V</kbd></td><td>粘贴到<b>播放头</b>位置，片段之间的相对间距保持不变</td></tr>
+<tr><td style="padding:3px 10px 3px 0"><kbd>Ctrl</kbd>+<kbd>V</kbd></td><td>粘贴到<b>播放头</b>位置，片段之间的相对间距保持不变；落到<b>当前选中轨</b>（没选中轨道时回各自原轨，状态栏会写明）</td></tr>
 <tr><td style="padding:3px 10px 3px 0"><kbd>Ctrl</kbd>+<kbd>A</kbd></td><td>全选时间轴上的所有片段</td></tr>
 <tr><td style="padding:3px 10px 3px 0"><kbd>Ctrl</kbd>+<kbd>Z</kbd></td><td><b>撤销</b>上一步改动（删除 / 移动 / 改长度 / 改参数 / 改总长…都各算一步；连续拖动只算一步）</td></tr>
 <tr><td style="padding:3px 10px 3px 0"><kbd>Ctrl</kbd>+<kbd>Y</kbd></td><td><b>重做</b>刚撤销的那一步（<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> 也可以）</td></tr>
@@ -4525,7 +5552,7 @@ function openHelpModalFallback() {
 生物阵营取自「生物」条目的友好生物/敌对生物章节。
 </p>
 </div>`;
-  $('modal').style.display = 'flex';
+  openModalPanel();      // 记录触发者 + 把焦点放进弹窗（关闭时再还回去）
 }
 
 /**
@@ -4550,7 +5577,7 @@ async function openAuthorLink() {
 }
 
 // ---------------------------------------------------------------------------
-// 导出系统信息（卡 t_20c2e144）
+// 导出系统信息
 //
 // 起始页「系统信息」那一栏的按钮走这里：把「只有渲染进程知道」的两块实测值
 // （库规模、首次加载库耗时）打包给主进程，主进程再补上系统 / CPU / 内存 / 显卡 /
@@ -4792,7 +5819,7 @@ function setVideoTime(sec) {
 function syncVisualTo(ms) {
   if (STATE.gifPlayer) STATE.gifPlayer.seek(ms);
   if (STATE.videoEl) setVideoTime(ms / 1000);
-  // 模型预览也吃同一个「当前时刻」：拖播放头 / 暂停都会重画到对应姿态（卡 t_fa17801d）
+  // 模型预览也吃同一个「当前时刻」：拖播放头 / 暂停都会重画到对应姿态
   if (STATE.visualMode === 'model') MCS_MODELPREVIEW.render(ms);
   updateVisualMeta(ms);
 }
@@ -4839,6 +5866,22 @@ function startVisualOnlyClock(fromMs) {
   visualOnlyRaf = requestAnimationFrame(tick);
 }
 
+/**
+ * 播放中实时应用轨道静音 / 独奏。
+ *
+ * 以前 M/S 只改按钮状态：clips.muted 只在「开始播放」那一刻被读一次，
+ * 所以播放中静音、独奏另一条空轨都听不出变化（用 1kHz 受控声实测确认 0dB 衰减）。
+ * 现在每次 M/S 变化都把最新的「该不该响」交给音频引擎，由它改写正在发声音源的
+ * 静音闸 / 补排被解除静音的片段。没在播放时什么都不做（下次播放按 clipsForPlayback 排）。
+ *
+ * @returns 引擎回报的摘要（null = 没在播放，不用管）
+ */
+function syncLiveTrackAudio() {
+  if (!AudioEngine || typeof AudioEngine.applyClipMutes !== 'function') return null;
+  if (!AudioEngine.isPlaying()) return null;
+  return AudioEngine.applyClipMutes(clipsForPlayback());
+}
+
 /** 播放用的片段列表（已算好 muted：轨道静音 / 独奏） */
 function clipsForPlayback() {
   const anySolo = STATE.doc.tracks.some((x) => x.solo);
@@ -4855,7 +5898,7 @@ function clipsForPlayback() {
 function startTransport(fromMs) {
   const clips = clipsForPlayback();
   // 模型预览和 GIF 一样算「有画面可以看」：只导入模型（还没配音效）时按播放，
-  // 播放头照样推进、模型按动画动起来（K 卡 t_fa17801d）
+  // 播放头照样推进、模型按动画动起来（K）
   const hasVisual = !!(STATE.gifPlayer || STATE.videoEl
     || (STATE.visualMode === 'model' && MCS_MODELPREVIEW.scene));
   // 开始播放 = 状态变了：右侧挂着的「再点 ▶ 从头播放」这类一次性提示立即失效
@@ -5035,7 +6078,7 @@ const TAIL_BADGE_TEXT = '⏹ 画面已定格在 GIF 末帧';
 const TAIL_BADGE_TAIL_NOTE = '（时间轴灰色区没有画面）';
 
 /**
- * 越过 GIF 末尾时的提示层（P2-1）。
+ * 越过 GIF 末尾时的提示层。
  * 现象：时间轴比 GIF 长时，播放头过了 GIF 末尾画面就不再变化，
  * 而唯一的说明是元信息行里那行小字 —— 用户没看到就会以为画面卡死。
  * 所以补一个带底色的一眼可见徽标；只在「真的越过末尾」时出现，
@@ -5056,47 +6099,298 @@ function setTailHints(on, shadeVisible) {
   if (b.textContent !== text) b.textContent = text;
 }
 
-/** 预览区高度可拖拽调整（存 localStorage，下次打开保持） */
-function setupPreviewResizer() {
-  const bar = $('previewResizer');
-  const area = $('previewArea');
-  if (!bar || !area) return;
+// ---------------------------------------------------------------------------
+// 工作区布局：横向分隔线（预览区 ↔ 时间轴）+ 两条纵向分隔线（左栏 / 右栏）
+// ---------------------------------------------------------------------------
+// 用户已确认 2.1：拖动分隔线只调整「各工作区占窗口的比例」，相邻区同步伸缩；
+//   不是缩放模型 / 波形，也不是调整整个窗口大小。
+// 三条线共用同一套流程：读期望值 → 按当前窗口夹紧（最小尺寸 + 中间区保底）→ 应用到 DOM。
+// 存的是用户最后一次给的值（layoutDesired），显示的是夹紧后的结果。
+// 窗口缩小时只夹紧显示、不改期望值 —— 窗口再放大回原尺寸，用户原来的比例能自己回来。
+const LAYOUT_DEFAULTS = { previewH: 260, leftW: 270, rightW: 320 };
+// 最小尺寸：再小内容就没了（左栏搜索框 / 右栏标签页 / 时间轴轨道都要留得下）
+const LAYOUT_MIN = { previewH: 120, timelineH: 110, leftW: 190, rightW: 220, centerW: 420 };
+const LAYOUT_STORE = {
+  previewH: 'mcs.layout.previewH',   // 老版本存的是 mcs.previewH，读到就迁过来
+  leftW: 'mcs.layout.leftW',
+  rightW: 'mcs.layout.rightW',
+};
+const LAYOUT_LABELS = { previewH: '预览区', leftW: '音效库', rightW: '属性栏' };
+const layoutDesired = { ...LAYOUT_DEFAULTS };      // 用户期望值（持久化）
+let layoutApplied = { ...LAYOUT_DEFAULTS };        // 当前真正画在屏幕上的值
+let layoutTipTimer = 0;
 
-  const saved = parseInt(localStorage.getItem('mcs.previewH') || '', 10);
-  if (saved >= 120) area.style.height = saved + 'px';
+function clampNum(v, lo, hi) {
+  return Math.max(lo, Math.min(hi, v));
+}
 
-  let dragging = false;
-  let startY = 0;
-  let startH = 0;
+function readStoredLayout() {
+  const read = (key, legacyKey, fallback) => {
+    let raw = null;
+    try { raw = localStorage.getItem(key); } catch (e) { /* 存储不可用就用默认 */ }
+    if (raw == null && legacyKey) {
+      try { raw = localStorage.getItem(legacyKey); } catch (e) { /* 同上 */ }
+    }
+    const n = parseInt(raw, 10);
+    return Number.isFinite(n) ? n : fallback;
+  };
+  layoutDesired.previewH = read(LAYOUT_STORE.previewH, 'mcs.previewH', LAYOUT_DEFAULTS.previewH);
+  layoutDesired.leftW = read(LAYOUT_STORE.leftW, null, LAYOUT_DEFAULTS.leftW);
+  layoutDesired.rightW = read(LAYOUT_STORE.rightW, null, LAYOUT_DEFAULTS.rightW);
+}
+
+/** 当前窗口下布局能用的空间（宽：扣掉两条分隔线；高：扣掉步骤条/传输条/状态栏）。 */
+function layoutBox() {
+  const layoutEl = $('layout');
+  const centerEl = $('centerPanel');
+  const totalW = layoutEl ? layoutEl.clientWidth : window.innerWidth;
+  const splitW = ['leftSplitter', 'rightSplitter'].reduce((n, id) => {
+    const el = $(id);
+    return n + (el ? el.offsetWidth : 6);
+  }, 0);
+  const fixedH = ['stepBar', 'transport', 'statusBar'].reduce((n, id) => {
+    const el = $(id);
+    return n + (el ? el.offsetHeight : 0);
+  }, 0);
+  // 顶栏改两行后不再固定 46px —— 兜底值按真实顶栏高度算，
+  // 顶栏将来再长一行也不会把布局算歪（正常路径走 centerPanel.clientHeight）。
+  const topbarEl = $('topbar');
+  const topbarH = topbarEl ? topbarEl.offsetHeight : 46;
+  const totalH = centerEl ? centerEl.clientHeight : Math.max(0, window.innerHeight - topbarH);
+  return {
+    totalW, splitW, fixedH, totalH,
+    freeW: totalW - splitW,
+    maxPreviewH: Math.max(LAYOUT_MIN.previewH, totalH - fixedH - LAYOUT_MIN.timelineH),
+  };
+}
+
+/**
+ * 每条分隔线此刻能拖的范围。
+ * 左栏上限 = 可用宽 − 右栏当前宽 − 中间区最小宽；右栏同理反算。
+ * 这样「拖左栏」时右边不会被挤出窗口，中间工作区也始终留得下。
+ */
+function layoutLimits() {
+  const box = layoutBox();
+  const min = LAYOUT_MIN;
+  const rightNow = clampNum(layoutDesired.rightW, min.rightW,
+    Math.max(min.rightW, box.freeW - min.leftW - min.centerW));
+  const leftNow = clampNum(layoutDesired.leftW, min.leftW,
+    Math.max(min.leftW, box.freeW - min.rightW - min.centerW));
+  return {
+    previewH: { min: min.previewH, max: box.maxPreviewH },
+    leftW: { min: min.leftW, max: Math.max(min.leftW, box.freeW - rightNow - min.centerW) },
+    rightW: { min: min.rightW, max: Math.max(min.rightW, box.freeW - leftNow - min.centerW) },
+  };
+}
+
+/** 把期望值夹紧后写到 DOM；返回屏幕上实际的值（px）。 */
+function applyLayout() {
+  const lim = layoutLimits();
+  const box = layoutBox();
+  let leftW = clampNum(layoutDesired.leftW, lim.leftW.min, lim.leftW.max);
+  let rightW = clampNum(layoutDesired.rightW, lim.rightW.min, lim.rightW.max);
+  // 双保险：两栏同时取上限时中间会被压破 —— 先把右栏收到最小，再收左栏
+  let over = leftW + rightW + LAYOUT_MIN.centerW - box.freeW;
+  if (over > 0) {
+    const cutR = Math.min(over, rightW - lim.rightW.min);
+    rightW -= cutR; over -= cutR;
+    if (over > 0) leftW = Math.max(lim.leftW.min, leftW - over);
+  }
+  const previewH = clampNum(layoutDesired.previewH, lim.previewH.min, lim.previewH.max);
+
+  const leftEl = $('leftPanel');
+  const rightEl = $('rightPanel');
+  const areaEl = $('previewArea');
+  if (leftEl) leftEl.style.width = Math.round(leftW) + 'px';
+  if (rightEl) rightEl.style.width = Math.round(rightW) + 'px';
+  if (areaEl) areaEl.style.height = Math.round(previewH) + 'px';
+
+  layoutApplied = {
+    previewH: Math.round(previewH),
+    leftW: Math.round(leftW),
+    rightW: Math.round(rightW),
+    centerW: Math.round(box.freeW - leftW - rightW),
+  };
+  // 读屏 / 自动化检查读的是 aria-valuenow：和真实像素保持一致
+  const aria = [
+    ['previewResizer', 'previewH'],
+    ['leftSplitter', 'leftW'],
+    ['rightSplitter', 'rightW'],
+  ];
+  for (const [id, key] of aria) {
+    const el = $(id);
+    if (!el) continue;
+    el.setAttribute('aria-valuenow', String(layoutApplied[key]));
+    if (lim[key] && lim[key].max != null) el.setAttribute('aria-valuemax', String(Math.round(lim[key].max)));
+  }
+  return layoutApplied;
+}
+
+function persistLayout() {
+  const save = (key) => {
+    try { localStorage.setItem(LAYOUT_STORE[key], String(Math.round(layoutDesired[key]))); } catch (e) { /* 存不了就只在本次生效 */ }
+  };
+  save('previewH'); save('leftW'); save('rightW');
+}
+
+function showLayoutTip(label, px, clientX, clientY) {
+  const tip = $('layoutTip');
+  if (!tip) return;
+  tip.textContent = label + ' ' + Math.round(px) + 'px';
+  tip.style.display = '';
+  tip.style.left = Math.round(clientX) + 'px';
+  tip.style.top = Math.round(clientY) + 'px';
+  if (layoutTipTimer) { clearTimeout(layoutTipTimer); layoutTipTimer = 0; }
+}
+
+function hideLayoutTip() {
+  const tip = $('layoutTip');
+  if (!tip) return;
+  tip.style.display = 'none';
+  if (layoutTipTimer) { clearTimeout(layoutTipTimer); layoutTipTimer = 0; }
+}
+
+/**
+ * 给一条分隔线接上真实的鼠标拖动（window 级 mousemove/mouseup，拖出元素外也不丢）。
+ * spec.key 同时是布局字段名：previewH / leftW / rightW。
+ */
+function wireLayoutSplitter(bar, spec) {
+  if (!bar || bar._layoutWired) return;
+  bar._layoutWired = true;
+  let drag = null;
 
   bar.addEventListener('mousedown', (e) => {
-    dragging = true;
-    startY = e.clientY;
-    startH = area.getBoundingClientRect().height;
-    document.body.style.cursor = 'ns-resize';
+    if (e.button !== 0) return;
     e.preventDefault();
+    try { bar.focus({ preventScroll: true }); } catch (err) { bar.focus(); }
+    const leftEl = $('leftPanel');
+    const rightEl = $('rightPanel');
+    const areaEl = $('previewArea');
+    drag = {
+      x: e.clientX,
+      y: e.clientY,
+      leftW: leftEl ? leftEl.getBoundingClientRect().width : LAYOUT_DEFAULTS.leftW,
+      rightW: rightEl ? rightEl.getBoundingClientRect().width : LAYOUT_DEFAULTS.rightW,
+      previewH: areaEl ? areaEl.getBoundingClientRect().height : LAYOUT_DEFAULTS.previewH,
+    };
+    bar.classList.add('dragging');
+    document.body.classList.add('layout-dragging', spec.axis === 'x' ? 'drag-col' : 'drag-row');
+    showLayoutTip(spec.label, layoutApplied[spec.key], e.clientX, e.clientY);
   });
 
-  const onMove = (e) => {
-    if (!dragging) return;
-    const h = Math.max(120, Math.min(startH + (e.clientY - startY), window.innerHeight - 260));
-    area.style.height = h + 'px';
-  };
-  const onUp = () => {
-    if (!dragging) return;
-    dragging = false;
-    document.body.style.cursor = '';
-    localStorage.setItem('mcs.previewH', String(Math.round(area.getBoundingClientRect().height)));
-  };
+  window.addEventListener('mousemove', (e) => {
+    if (!drag) return;
+    let target;
+    if (spec.key === 'leftW') target = drag.leftW + (e.clientX - drag.x);
+    else if (spec.key === 'rightW') target = drag.rightW - (e.clientX - drag.x); // 分隔线往左 = 右栏变宽
+    else target = drag.previewH + (e.clientY - drag.y);
+    const lim = layoutLimits()[spec.key];
+    layoutDesired[spec.key] = clampNum(target, lim.min, lim.max);
+    applyLayout();
+    showLayoutTip(spec.label, layoutApplied[spec.key], e.clientX, e.clientY);
+  });
 
-  window.addEventListener('mousemove', onMove);
-  window.addEventListener('mouseup', onUp);
+  const endDrag = () => {
+    if (!drag) return;
+    drag = null;
+    bar.classList.remove('dragging');
+    document.body.classList.remove('layout-dragging', 'drag-col', 'drag-row');
+    hideLayoutTip();
+    persistLayout();
+  };
+  // 松手在窗口外 / 窗口失焦也要收尾，否则光标和拖动状态会卡住
+  window.addEventListener('mouseup', endDrag);
+  window.addEventListener('blur', endDrag);
 
+  // 键盘：分隔线可 Tab 聚焦，方向键每次 10px（读屏用户不用鼠标也能调）
+  bar.addEventListener('keydown', (e) => {
+    let delta = 0;
+    if (spec.key === 'previewH') {
+      if (e.key === 'ArrowUp') delta = -10;
+      else if (e.key === 'ArrowDown') delta = 10;
+    } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      const dir = e.key === 'ArrowRight' ? 10 : -10;
+      delta = spec.key === 'rightW' ? -dir : dir; // 往左拖左栏变窄、右栏变宽
+    }
+    if (!delta) return;
+    e.preventDefault();
+    // ：光 preventDefault 不够，事件还会冒泡到 window 上的
+    // 全局快捷键处理器（那边 ArrowLeft/ArrowRight = 移动播放头 / 微调片段）。
+    // 于是焦点在分隔线上按一下，布局改 10px 的同时播放头也被 seek 一格
+    // （QA 实测 0→50ms，连按 22 次 0→1100ms）。分隔线自己消费掉的方向键
+    // 不再向上传播；其它键（空格 / Delete / …）行为不变。
+    e.stopPropagation();
+    const lim = layoutLimits()[spec.key];
+    layoutDesired[spec.key] = clampNum(layoutApplied[spec.key] + delta, lim.min, lim.max);
+    applyLayout();
+    persistLayout();
+  });
+
+  // 双击 = 这一条恢复默认
   bar.addEventListener('dblclick', () => {
-    area.style.height = '260px';
-    localStorage.setItem('mcs.previewH', '260');
+    layoutDesired[spec.key] = LAYOUT_DEFAULTS[spec.key];
+    applyLayout();
+    persistLayout();
+    status('已恢复默认布局', spec.label + ' ' + layoutApplied[spec.key] + 'px');
   });
 }
+
+/** 一键恢复三条线到默认值（顶栏「重置布局」）。 */
+function resetLayout() {
+  Object.assign(layoutDesired, LAYOUT_DEFAULTS);
+  applyLayout();
+  persistLayout();
+  status('已恢复默认布局',
+    '预览 ' + layoutApplied.previewH + 'px · 音效库 ' + layoutApplied.leftW + 'px · 属性栏 ' + layoutApplied.rightW + 'px');
+}
+
+function setupLayoutResizers() {
+  if (setupLayoutResizers._done) return 'already';
+  setupLayoutResizers._done = true;
+
+  readStoredLayout();
+  applyLayout();
+
+  wireLayoutSplitter($('previewResizer'), { key: 'previewH', axis: 'y', label: LAYOUT_LABELS.previewH });
+  wireLayoutSplitter($('leftSplitter'), { key: 'leftW', axis: 'x', label: LAYOUT_LABELS.leftW });
+  wireLayoutSplitter($('rightSplitter'), { key: 'rightW', axis: 'x', label: LAYOUT_LABELS.rightW });
+
+  const btn = $('btnResetLayout');
+  if (btn) btn.addEventListener('click', (e) => {
+    e.stopPropagation();   // 状态栏整条在「试听失败」时可点是录音帮助，别被这一下顺带触发
+    resetLayout();
+  });
+
+  // 窗口缩放：重新夹紧，保证不溢出、不遮挡下方控件（只夹显示，不改期望值）
+  let raf = 0;
+  window.addEventListener('resize', () => {
+    if (raf) return;
+    raf = requestAnimationFrame(() => { raf = 0; applyLayout(); });
+  });
+  // 顶栏/步骤条/状态栏高度变化（切页、换字体）也重新算一遍
+  if (window.ResizeObserver && $('centerPanel')) {
+    new ResizeObserver(() => applyLayout()).observe($('centerPanel'));
+  }
+}
+
+// 开发自测 / QA 读取布局真相：屏幕上的值、期望值、可拖范围、是否正在拖
+window.__MCS_LAYOUT__ = () => ({
+  applied: { ...layoutApplied },
+  desired: { ...layoutDesired },
+  limits: layoutLimits(),
+  defaults: { ...LAYOUT_DEFAULTS },
+  min: { ...LAYOUT_MIN },
+  dragging: document.body.classList.contains('layout-dragging'),
+  tipVisible: (() => { const t = $('layoutTip'); return !!(t && t.style.display !== 'none'); })(),
+  stored: (() => {
+    const out = {};
+    for (const k of Object.keys(LAYOUT_STORE)) {
+      try { out[k] = localStorage.getItem(LAYOUT_STORE[k]); } catch (e) { out[k] = null; }
+    }
+    return out;
+  })(),
+});
+window.__MCS_RESET_LAYOUT__ = () => { resetLayout(); return window.__MCS_LAYOUT__(); };
 
 // ---------------------------------------------------------------------------
 // 传输控制
@@ -5111,6 +6405,15 @@ function playStatusText() {
   return '播放中…' + (STATE.gifPlayer ? '（GIF 已同步）' : '');
 }
 
+/**
+ * 「已暂停 / 停在 X.XXs」——暂停按钮和「暂停时拖动试听松手」共用一份说法。
+ * 拖动收尾必须走这里：试听已经停了，状态栏就不能还挂着「拖动试听中」
+ * 。
+ */
+function pausedStatusHint() {
+  statusHint('已暂停', `停在 ${(STATE.playheadMs / 1000).toFixed(2)}s`);
+}
+
 function setupTransport() {
   $('btnPlay').addEventListener('click', () => {
     // 用 STATE.transport（而不是 AudioEngine.isPlaying()）判断该播还是该停。
@@ -5119,7 +6422,7 @@ function setupTransport() {
     if (STATE.transport === 'playing') {
       pauseTransport();
       // 右侧「停在 X.XXs」只在暂停期间成立：一旦续播就该消失（见 status/statusHint）
-      statusHint('已暂停', `停在 ${(STATE.playheadMs / 1000).toFixed(2)}s`);
+      pausedStatusHint();
       return;
     }
     // 播到末尾后（或播放头本来就停在末尾）再点播放 → 从 0ms / 首帧重新开始。
@@ -5140,11 +6443,14 @@ function setupTransport() {
     $('masterVal').textContent = Math.round(v * 100) + '%';
   });
 
+  syncZoomControl();      // 滑杆的 min/max/step 与代码里的真实上下限同一份（不再各写一套）
   $('rngZoom').addEventListener('input', (e) => {
-    STATE.zoom = Number(e.target.value);
-    $('zoomVal').textContent = STATE.zoom.toFixed(2) + ' px/ms';
-    renderTimeline();
+    STATE.zoom = clampNum(Number(e.target.value), ZOOM_MIN, ZOOM_MAX);
     updateZoomFitHint();
+    renderTimeline();
+    // 手动改缩放 = 用户自己换了一个视角：状态栏必须跟着说真话，
+    // 不能还挂着上一次「已缩放到适合窗口」（实测复现过）。
+    showZoomStatus();
   });
 
   // ---- Alt + 滚轮：缩放时间轴 ----（放在轨道区上）
@@ -5153,7 +6459,7 @@ function setupTransport() {
     if (!e.altKey) return;
     e.preventDefault();
     const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
-    const next = Math.min(4, Math.max(0.02, STATE.zoom * factor));
+    const next = clampNum(STATE.zoom * factor, ZOOM_MIN, ZOOM_MAX);
     // 以鼠标位置为锚点缩放，视觉上更自然
     const rect = zoomArea.getBoundingClientRect();
     const pxInContent = e.clientX - rect.left + zoomArea.scrollLeft;
@@ -5161,12 +6467,29 @@ function setupTransport() {
     STATE.zoom = next;
     renderTimeline();
     zoomArea.scrollLeft = msAtCursor * STATE.zoom - (e.clientX - rect.left);
-    $('rngZoom').value = String(next);
-    $('zoomVal').textContent = next.toFixed(2) + ' px/ms';
+    syncZoomControl();
+    updateZoomFitHint();
+    showZoomStatus();
   }, { passive: false });
 
   // ---- 键盘快捷键 ----
   window.addEventListener('keydown', (e) => {
+    // 弹窗是盖住整页的模态层，打开期间背景快捷键一律不生效。
+    // 只有两条例外：Esc 关闭并还焦点、Tab/Shift+Tab 在弹窗内循环（焦点陷阱）。
+    // 其余按键直接返回、且**不** preventDefault —— 弹窗里的输入框照常打字。
+    if (isModalShown()) {
+      if (e.code === 'Escape' || e.key === 'Escape') {
+        e.preventDefault();
+        closeModal();
+        return;
+      }
+      if (e.key === 'Tab') {
+        trapModalFocus(e, $('modal'));
+        return;
+      }
+      return;
+    }
+
     const inField = e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA'
       || e.target.isContentEditable;
     // 真正要打字的地方（文本框 / 搜索框 / 备注）不能抢空格；
@@ -5180,7 +6503,7 @@ function setupTransport() {
     // 文本框则必须保留浏览器自己的文本撤销（搜索 / 标签 / 备注都依赖它）。
     const isDocNumberField = e.target.tagName === 'INPUT' && e.target.type === 'number';
 
-    // 教程入口从工作页工具栏搬到起始页（卡 t_49c08ec4）；编辑到一半查快捷键的习惯不能丢，
+    // 教程入口从工作页工具栏搬到起始页；编辑到一半查快捷键的习惯不能丢，
     // 所以在工作页留一个不占位的入口：F1 打开同一份离线教程。
     if (e.key === 'F1') {
       e.preventDefault();
@@ -5188,21 +6511,21 @@ function setupTransport() {
       return;
     }
 
-    // 起始页铺在最上面时，工作页的快捷键一律不吃（卡 t_49c08ec4）：用户看着工程列表
+    // 起始页铺在最上面时，工作页的快捷键一律不吃：用户看着工程列表
     // 按空格 / Delete / Ctrl+S，绝不该悄悄播放、删片段或写盘 —— 那些动作发生在被盖住的
     // 编辑器里，界面上一点反馈都看不见。Esc 例外，它是通用的「先关弹窗」退出键。
     if (e.key !== 'Escape' && window.MCS_OVERVIEW && MCS_OVERVIEW.isOpen && MCS_OVERVIEW.isOpen()) return;
 
     // 空格播放/暂停（文本框里不拦）
     //
-    // 例外（卡 t_4e96920b）：焦点在搜索框的「清空 ✕」上时不抢空格 —— 它是个原生
+    // 例外：焦点在搜索框的「清空 ✕」上时不抢空格 —— 它是个原生
     // <button>，浏览器本来就会用空格激活它。以前一律抢走，于是 ✕ 用 Tab 聚焦后按
     // 空格触发的是播放/暂停，清空没发生（用户的感觉正是「按了没反应」）。
     // 不推广到所有按钮：运输按钮（播放/停止）上按空格继续按
     // 「空格 = 播放/暂停」走，这条是帮助里写明的约定，别改坏。
     // （例外清单从「只有清空 ✕」扩到「清空 ✕ + 调整页里的按钮」，见下面一段。）
     const onClearSearchBtn = e.target.id === 'btnClearSearch';
-    // 卡 t_c54d031b：调整页（步骤条 + 素材槽 / 角度面板）里的按钮同样放行 ——
+    // 调整页（步骤条 + 素材槽 / 角度面板）里的按钮同样放行 ——
     // 「空格 = 播放/暂停」是给运输按钮定的约定；键盘用户 Tab 到「重置角度」按空格
     // 却开始播放，就成了「按了没反应」。只认这两个容器里的 <button>，
     // 数字框 / 时间轴 / 运输按钮的行为一律不变（数字框里按空格仍是播放/暂停）。
@@ -5229,7 +6552,7 @@ function setupTransport() {
     }
 
     // ---- 保存类快捷键：不分焦点，永远生效 ----
-    //   P1（mcs-qa 卡 t_93fd27a1 复现）：焦点停在搜索框 / BPM / 总长这些输入框里
+    //   （实测）：焦点停在搜索框 / BPM / 总长这些输入框里
     //   按 Ctrl+S「完全无反应」—— 不弹「另存为」、不落盘、状态栏一字不变、
     //   标题的「•」还在；而搜索框里恰好挂着上一条「已保存工程：…」，看着像已保存。
     //   根因就是下面那句 `if (inField) return;` 把**所有**快捷键整段跳过。
@@ -5316,7 +6639,7 @@ function setupTransport() {
         if (STATE.doc.config.snap && !fine) {
           clip.startMs = Math.round(clip.startMs / STATE.doc.config.gridMs) * STATE.doc.config.gridMs;
         }
-        // 方向键挪片段也是改文档：必须标脏（否则关窗不提示保存）+ 进撤销栈（卡 t_6b99a1fd）
+        // 方向键挪片段也是改文档：必须标脏（否则关窗不提示保存）+ 进撤销栈
         markDirty('move');
         renderTimeline(); renderProps(); revalidate();
         status(
@@ -5346,16 +6669,18 @@ function setupTransport() {
     // +/-：缩放时间轴
     if (e.key === '=' || e.key === '+') {
       e.preventDefault();
-      STATE.zoom = Math.min(4, STATE.zoom * 1.2);
-      $('rngZoom').value = String(STATE.zoom);
+      STATE.zoom = clampNum(STATE.zoom * 1.2, ZOOM_MIN, ZOOM_MAX);
+      syncZoomControl();
       renderTimeline(); updateZoomFitHint();
+      showZoomStatus();
       return;
     }
     if (e.key === '-' || e.key === '_') {
       e.preventDefault();
-      STATE.zoom = Math.max(0.02, STATE.zoom / 1.2);
-      $('rngZoom').value = String(STATE.zoom);
+      STATE.zoom = clampNum(STATE.zoom / 1.2, ZOOM_MIN, ZOOM_MAX);
+      syncZoomControl();
       renderTimeline(); updateZoomFitHint();
+      showZoomStatus();
       return;
     }
 
@@ -5367,16 +6692,24 @@ function setupTransport() {
     }
 
     // M / S：切换选中片段所在轨道的静音 / 独奏
-    if (!e.ctrlKey && !e.metaKey && clip && (e.key === 'm' || e.key === 'M')) {
-      const t = STATE.doc.tracks.find((x) => x.name === clip.track);
-      if (t) { t.muted = !t.muted; markDirty('mute'); renderTimeline(); status(`${t.label}：${t.muted ? '已静音' : '取消静音'}`); }
-      return;
-    }
-    if (!e.ctrlKey && !e.metaKey && clip && (e.key === 's' || e.key === 'S')) {
-      const t = STATE.doc.tracks.find((x) => x.name === clip.track);
-      if (t) { t.solo = !t.solo; markDirty('solo'); renderTimeline(); status(t.solo ? `${t.label}：独奏中` : `${t.label}：退出独奏`); }
-      return;
-    }
+        if (!e.ctrlKey && !e.metaKey && clip && (e.key === 'm' || e.key === 'M')) {
+          const t = STATE.doc.tracks.find((x) => x.name === clip.track);
+          if (t) {
+            t.muted = !t.muted; markDirty('mute'); renderTimeline();
+            syncLiveTrackAudio();        // 播放中立刻生效
+            status(`${t.label}：${t.muted ? '已静音' : '取消静音'}`);
+          }
+          return;
+        }
+        if (!e.ctrlKey && !e.metaKey && clip && (e.key === 's' || e.key === 'S')) {
+          const t = STATE.doc.tracks.find((x) => x.name === clip.track);
+          if (t) {
+            t.solo = !t.solo; markDirty('solo'); renderTimeline();
+            syncLiveTrackAudio();        // 播放中立刻生效
+            status(t.solo ? `${t.label}：独奏中` : `${t.label}：退出独奏`);
+          }
+          return;
+        }
 
     // Enter：试听选中片段
     if (e.code === 'Enter' && clip) {
@@ -5409,7 +6742,7 @@ function duplicateClip(clip, opts) {
     startMs: clip.startMs + clip.durationMs,
   }));
   STATE.doc.clips.push(copy);
-  markDirty('dup');            // 卡 t_c4491bba：带 kind，撤销时说清是「复制片段」
+  markDirty('dup');            // 带 kind，撤销时说清是「复制片段」
   if (!o.batch) {
     setSelection([copy.id], copy.id);
     renderTimeline(); renderProps(); revalidate();
@@ -5454,15 +6787,64 @@ function copySelection() {
   return CLIPBOARD.items.length;
 }
 
-/** Ctrl+V / 「粘贴到播放头」：保持相对间距，新片段全部选中 */
+/**
+ * 粘贴目标轨裁决。
+ *   目标轨 = 当前选中轨 STATE.selectedTrack：
+ *     · 该轨存在且未锁定 → 本次粘贴的全部片段落到它上面；
+ *     · 为空 / 不存在 / 锁定 → 保持原行为（每条片段回自己的原轨），状态栏必须说明原因。
+ * 返回 { name, label, idx, reason, tracks }；name 为 null 表示走旧路径。
+ */
+function pasteTargetTrack() {
+  const tracks = STATE.doc.tracks || [];
+  const name = STATE.selectedTrack;
+  const idx = name ? tracks.findIndex((t) => t.name === name) : -1;
+  if (idx < 0) return { name: null, label: null, idx: -1, tracks, reason: name ? 'missing' : 'none' };
+  const t = tracks[idx];
+  if (!t || t.locked) return { name: null, label: t ? t.label : null, idx: -1, tracks, reason: 'locked' };
+  return { name: t.name, label: t.label, idx, tracks, reason: '' };
+}
+
+/**
+ * 把剪贴板每条 item 映射到目标轨（只在粘贴瞬间算一次，不改 item 本身）。
+ * 多轨集合按 doc.tracks 的轨道序号整体平移：集合里最小轨序 → 目标轨；
+ * 平移越界的片段钳到最近的存在轨道，并用 clamped 计数让调用方明说，不静默丢位置。
+ */
+function planPasteTracks(items, tgt) {
+  const names = (tgt.tracks || []).map((t) => t.name);
+  const rows = items.map((it) => ({ track: it.data.track, clamped: false }));
+  if (!tgt.name || !names.length) return { rows, clamped: 0, base: -1, shift: 0 };
+  const srcIdx = items.map((it) => names.indexOf(it.data.track));
+  const known = srcIdx.filter((i) => i >= 0);
+  const base = known.length ? Math.min.apply(null, known) : tgt.idx;
+  const shift = tgt.idx - base;
+  let clamped = 0;
+  rows.forEach((r, i) => {
+    const src = srcIdx[i] >= 0 ? srcIdx[i] : base;
+    const want = src + shift;
+    const got = Math.max(0, Math.min(names.length - 1, want));
+    if (got !== want) { clamped++; r.clamped = true; }
+    r.track = names[got];
+  });
+  return { rows, clamped, base, shift };
+}
+
+/** Ctrl+V / 「粘贴到播放头」：保持相对间距，新片段全部选中；目标轨见 pasteTargetTrack() */
 function pasteAtPlayhead() {
   if (!CLIPBOARD || !CLIPBOARD.items.length) {
     status('剪贴板是空的 —— 先选中片段并按 Ctrl+C 复制');
     return null;
   }
   const at = Math.max(0, Math.round(STATE.playheadMs || 0));
-  const created = CLIPBOARD.items.map((it) => {
-    const c = makeClip(Object.assign({}, it.data, { id: undefined, startMs: at + it.offsetMs }));
+  const tgt = pasteTargetTrack();                      // 目标轨契约
+  const plan = planPasteTracks(CLIPBOARD.items, tgt);
+  const prevSel = { ids: Array.from(STATE.selectedClipIds), primary: STATE.selectedClipId };
+  const created = CLIPBOARD.items.map((it, i) => {
+    // 只有起点按播放头重算；offsetMs / durationMs / fadeInMs / fadeOutMs 一律原样（契约第 5 条）
+    const c = makeClip(Object.assign({}, it.data, {
+      id: undefined,
+      startMs: at + it.offsetMs,
+      track: plan.rows[i].track || it.data.track,
+    }));
     STATE.doc.clips.push(c);
     return c;
   });
@@ -5471,7 +6853,8 @@ function pasteAtPlayhead() {
   for (const c of created) maxEnd = Math.max(maxEnd, c.startMs + c.durationMs);
   autoExtendTotal(at, maxEnd - at);      // 粘到总长之外时自动延长总线
 
-  markDirty('paste');          // 卡 t_c4491bba：带 kind，撤销时说清是「粘贴片段」
+  UNDO_PENDING_SEL = prevSel;  // 撤销这一步把选中集还原成粘贴前（契约第 6 条）
+  markDirty('paste');          // 带 kind，撤销时说清是「粘贴片段」
   setSelection(created.map((c) => c.id), created[0].id);
   renderTimeline(); renderProps(); revalidate();
 
@@ -5484,8 +6867,20 @@ function pasteAtPlayhead() {
       c.startMs < x.startMs + x.durationMs && x.startMs < c.startMs + c.durationMs);
     if (hit) overlaps++;
   }
+  // 目标轨说明（契约第 3/4 条）：落了哪条轨、回原轨的原因、被钳制的片段数，都必须写在状态栏
+  let note = '';
+  if (tgt.name) {
+    note = `　→ 目标轨「${tgt.label}」`;
+    if (plan.clamped) note += `　⚠ 部分片段被压到相邻轨道（${plan.clamped} 个）`;
+  } else if (tgt.reason === 'locked') {
+    note = `　⚠ 目标轨「${tgt.label}」已锁定 —— 未选中目标轨，粘贴回原轨`;
+  } else if (tgt.reason === 'missing') {
+    note = '　⚠ 选中的轨道已不存在 —— 未选中目标轨，粘贴回原轨';
+  } else {
+    note = '　⚠ 未选中目标轨，粘贴回原轨';
+  }
   status(`已在 ${(at / 1000).toFixed(3)}s 粘贴 ${created.length} 个片段（相对间距保持不变）`
-    + (overlaps ? `　⚠ ${overlaps} 个与已有片段重叠` : ''));
+    + (overlaps ? `　⚠ ${overlaps} 个与已有片段重叠` : '') + note);
   return created.map((c) => c.id);
 }
 
@@ -5505,9 +6900,10 @@ function deleteSelection() {
 
   STATE.doc.clips = STATE.doc.clips.filter((c) => !ids.has(c.id));
   clearSelection();
-  markDirty('delete');         // 卡 t_c4491bba：带 kind —— 删除这种丢数据的动作最需要说清
-  renderTimeline(); renderProps(); revalidate();
-  status((sel.length > 1
+  markDirty('delete');         // 带 kind —— 删除这种丢数据的动作最需要说清
+    renderTimeline(); renderProps(); revalidate();
+    syncLiveTrackAudio();        // 播放中删片段：它的声音立刻收掉
+    status((sel.length > 1
     ? `已删除 ${sel.length} 个片段`
     : `已删除片段「${sel[0].label}」`) + '（Ctrl+Z 可撤销）');
   return sel.length;
@@ -5572,7 +6968,9 @@ function splitSelectionAtPlayhead() {
   }
 
   const rightIds = [];
+  const fadeNotes = [];
   for (const c of targets) {
+    const before = { in: Math.max(0, Math.round(c.fadeInMs || 0)), out: Math.max(0, Math.round(c.fadeOutMs || 0)) };
     const right = makeClip(Object.assign({}, c, {
       id: undefined,
       startMs: at,
@@ -5580,15 +6978,23 @@ function splitSelectionAtPlayhead() {
       offsetMs: Math.round((c.offsetMs || 0) + (at - c.startMs)),
     }));
     c.durationMs = Math.max(1, Math.round(at - c.startMs));
+    // 拆分让两段各自变短，两段的淡化都按新条长收短（同一套 normalizeFades）
+    normalizeFades(c);
+    normalizeFades(right);
+    const np = fadeClampParts(before.in, before.out, c) || fadeClampParts(before.in, before.out, right);
+    if (np) fadeNotes.push(`「${c.label}」${np}`);
     STATE.doc.clips.push(right);
     rightIds.push(right.id);
   }
 
-  markDirty('split');          // 卡 t_c4491bba：带 kind，撤销时说「拆分片段」
+  markDirty('split');          // 带 kind，撤销时说「拆分片段」
   setSelection(targets.map((c) => c.id).concat(rightIds), targets[0].id);
   renderTimeline(); renderProps(); revalidate();
   status(`已在 ${(at / 1000).toFixed(3)}s 拆分 ${targets.length} 个片段`
-    + `（共 ${targets.length} + ${rightIds.length} 段，左右两段时长相加 = 原时长）`);
+    + `（共 ${targets.length} + ${rightIds.length} 段，左右两段时长相加 = 原时长）`
+    + (fadeNotes.length
+      ? `　⚠ 拆分后片段变短，淡入 + 淡出超过新条长的部分已同步收短：${fadeNotes.join('；')}`
+      : ''));
   return rightIds.length;
 }
 
@@ -5621,7 +7027,7 @@ function alignSelectionToGrid() {
   const gridName = cfg.gridMode === 'beat' && cfg.bpm > 0
     ? `按拍（${cfg.bpm} BPM，一拍 ${Math.round(g)}ms）`
     : `${Math.round(g)}ms`;
-  markDirty('align');          // 卡 t_c4491bba：带 kind，撤销时说「对齐到网格」
+  markDirty('align');          // 带 kind，撤销时说「对齐到网格」
   renderTimeline(); renderProps(); revalidate();
   if (delta === 0) {
     status(`选中的 ${movable.length} 个片段本来就在网格上（${gridName}）`
@@ -5640,7 +7046,7 @@ function toggleLockSelection(force) {
   if (!sel.length) { status('没有选中的片段 —— 先选中再锁定'); return 0; }
   const lock = force === undefined ? !sel.every(isLocked) : !!force;
   for (const c of sel) c.locked = lock;
-  markDirty('lock');           // 卡 t_c4491bba：带 kind，撤销时说「锁定 / 解锁」
+  markDirty('lock');           // 带 kind，撤销时说「锁定 / 解锁」
   renderTimeline(); renderProps(); revalidate();
   status(lock
     ? `已锁定 ${sel.length} 个片段 —— 不能再拖动 / 改长度（右键菜单可解锁）`
@@ -5667,7 +7073,7 @@ function restoreLastDelete() {
   const ids = entries.map((e) => e.clip.id);
   const n = ids.length;
   UNDO_DELETE = null;
-  markDirty('delete');         // 卡 t_c4491bba：撤销「撤销删除」= 再删一次，所以标签仍是「删除片段」
+  markDirty('delete');         // 撤销「撤销删除」= 再删一次，所以标签仍是「删除片段」
   setSelection(ids, ids[0]);
   renderTimeline(); renderProps(); revalidate();
   status(`已撤销删除 —— 恢复 ${n} 个片段（位置 / 参数原样放回）`);
@@ -5684,7 +7090,7 @@ function restoreLastDelete() {
 //         key='Process'（keyCode 229），看不到按的是哪个字母；主进程在 keyUp
 //         那一拍能看到真实的 key='s' + control，于是在主进程把这一条路接回来。
 //
-// 两个必须守住的点，都是实测出来的（mcs-qa 卡 t_e3735e8c 复现）：
+// 两个必须守住的点，都是实测出来的：
 //   a. 输入框里「改到一半」的编辑要一起存进去：BPM / 总长 / 属性数值都是
 //      change（失焦）才提交的，不先提交就会把**旧值**写进 timeline.json。
 //      blur() 会触发 change（值没被改过就不触发，天然幂等）。
@@ -5697,7 +7103,7 @@ function restoreLastDelete() {
 // ---------------------------------------------------------------------------
 // 输入法组字（IME composition）状态 —— 保存路径必须等组字上屏再落盘
 //
-// 为什么保存这一拍非要关心它（mcs-qa 卡 t_53d1d4b4 实测复现）：
+// 为什么保存这一拍非要关心它（实测）：
 //   中文输入法打字的「组字」阶段，拼音串会先写进输入框的 value，但**还没上屏**
 //   （框里显示 yan'shou'NAME）。此时按 Ctrl+S：
 //     · 主进程在 keyUp 把这一下转发过来 → 走到 performSaveShortcut；
@@ -5832,7 +7238,7 @@ async function saveProjectShortcut(forceDialog) {
   return null;
 }
 
-// 说明（卡 t_49c08ec4）：这里原来还有一份同名的 continueAfterUnsavedChanges，
+// 说明：这里原来还有一份同名的 continueAfterUnsavedChanges，
 // 与下方（overviewApi 之前）那一份重复。函数声明会整体提升、后者生效，前者是死代码，
 // 且它绕过了 performSaveShortcut 的输入法组字提交，留着迟早会咬人 —— 已删掉，只保留一份。
 
@@ -5865,7 +7271,7 @@ function moveSelectionByTrack(dir) {
   for (const c of movable) c.track = names[names.indexOf(c.track) + dir];
   const t = STATE.doc.tracks.find((x) => x.name === movable[0].track);
   STATE.selectedTrack = movable[0].track;
-  markDirty('move');           // 卡 t_c4491bba：带 kind（换轨道也是「移动片段」）
+  markDirty('move');           // 带 kind（换轨道也是「移动片段」）
   renderTimeline(); renderProps(); revalidate();
   status(`已把 ${movable.length} 个片段移到「${t ? t.label : movable[0].track}」`
     + (skipped ? `　⚠ ${skipped} 个已锁定未动` : ''));
@@ -5883,7 +7289,7 @@ function menuAction(act) {
     case 'lock': toggleLockSelection(true); break;
     case 'unlock': toggleLockSelection(false); break;
     case 'undoDelete': restoreLastDelete(); break;
-    // 通用撤销 / 重做（卡 t_6b99a1fd）：右键菜单和 Ctrl+Z / Ctrl+Y 是同一套栈
+    // 通用撤销 / 重做：右键菜单和 Ctrl+Z / Ctrl+Y 是同一套栈
     case 'undo': undo(); break;
     case 'redo': redo(); break;
     case 'moveUp': moveSelectionByTrack(-1); break;
@@ -5920,10 +7326,13 @@ function setupLaneContextMenu() {
 
   const closeMenu = () => { menu.style.display = 'none'; menu.innerHTML = ''; };
 
+  // 菜单项语义补的是「实际可交互的动作按钮」，不是空容器或内部 span。
+  //   role=menuitem 让动作项对辅助技术可见；分隔线给 role=separator，不算动作项。
+  //   原生 disabled / data-act / title 提示 / 文本 / 快捷键一律原样保留，行为不变。
   const renderMenu = (items, x, y) => {
     menu.innerHTML = items.map((it) => (it.sep
-      ? '<div class="ctx-sep"></div>'
-      : `<button class="ctx-item" data-act="${esc(it.act)}"`
+      ? '<div class="ctx-sep" role="separator"></div>'
+      : `<button class="ctx-item" role="menuitem" data-act="${esc(it.act)}"`
         + `${it.disabled ? ' disabled' : ''}`
         + `${it.hint ? ` title="${esc(it.hint)}"` : ''}>`
         + `<span>${esc(it.label)}</span><span class="ctx-key">${esc(it.key || '')}</span></button>`
@@ -5951,7 +7360,7 @@ function setupLaneContextMenu() {
       renderMenu([
         { act: 'paste', label: '粘贴到播放头', key: 'Ctrl+V', disabled: !hasClipboard(),
           hint: hasClipboard() ? '' : '剪贴板是空的：先选中片段按 Ctrl+C 复制' },
-        // 「撤销 / 重做」走通用撤销栈（卡 t_6b99a1fd）：删除只是它能撤的动作之一，
+        // 「撤销 / 重做」走通用撤销栈：删除只是它能撤的动作之一，
         // 移动片段 / 改长度 / 改参数 / 改总长 / 加轨道 都各算一步。
         { act: 'undo', label: '撤销', key: 'Ctrl+Z', disabled: !canUndo(),
           hint: canUndo() ? UNDO_LABELS[(UNDO.past[UNDO.past.length - 1] || {}).kind] || '' : '还没有可撤销的操作' },
@@ -6066,7 +7475,7 @@ function setupLaneContextMenu() {
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// 工程库 / 工程总览的渲染侧接线（卡 t_fa17801d）
+// 工程库 / 工程总览的渲染侧接线
 //
 // 判定逻辑只有一份：openProjectFromText()。顶栏「打开」、工程总览点卡片、
 // 工程总览里的「打开工程文件…」全部走它 —— 打开成功的判定、失败时的诊断文案、
@@ -6139,7 +7548,7 @@ async function openProjectFromText(content, filePath, opts) {
   // 手改过 / 第三方工具生成的工程常常只写自己关心的字段（比如 clips[] 里没有 pitch），
   // 而渲染 / 播放 / 导出各处会**直接**读这些值 —— 缺一个就抛未捕获异常、时间轴画一半。
   // 统一在这里补齐成 makeClip 的形状（正常工程逐字段全等，行为不变）。
-  // 「循环播放」已在卡 t_6b5016ec 里整体移除：老工程里的 loop / loopEndMs 由
+  // 「循环播放」已在里整体移除：老工程里的 loop / loopEndMs 由
   // normalizeImportedDoc 当废弃字段丢掉（不留半截、也不顺手丢别的东西）。
   // 先在这里数一下有几个片段用过，好在状态栏给一句人话 —— 提示只出现这一次，
   // 打开后一存盘，文件里就没有这两个字段了。
@@ -6148,14 +7557,20 @@ async function openProjectFromText(content, filePath, opts) {
     : 0;
   normalizeImportedDoc(doc);
 
+  // 工程里的总长超过本版本可编辑上限时，数据原样保留（保存也照写），
+  // 只在状态栏如实说明 —— 绝不静默改成上限值冒充「恢复成功」（那是偷改用户数据）。
+  // 绘制由 renderTimeline 的预算闸兜住，所以这样的工程打开也不会卡死。
+  const openedTotalOverMax = Number(doc.config.totalMs) > MAX_TOTAL_MS;
+  const openedTotalMs = Math.round(Number(doc.config.totalMs));
+
   STATE.doc = doc;
   clearSelection();
   SAVE_PATH = filePath || null;   // 之后 Ctrl+S 直接写回这个文件
   syncDocInputsFromDoc();         // 输入框 / 标题一次刷成新文档的值（与撤销共用一处真相）
   STATE.totalTouched = false;     // 打开的工程：总长还没在这次会话里被用户改过
   markClean();
-  undoReset();                    // 换工程 = 清空撤销历史（卡 t_6b99a1fd）
-  // 换工程也要清掉「这一档上次选了哪条动画」的会话记忆（卡 t_96cd9241）：
+  undoReset();                    // 换工程 = 清空撤销历史
+  // 换工程也要清掉「这一档上次选了哪条动画」的会话记忆：
   // 它只是本次会话里的手选记录、不属于文档。不清的话，打开的新工程若没在文件里记 animName，
   // 画布会莫名其妙播起上一个工程选过的动画（自验探针在「坏字段工程」用例上逮到过）。
   STATE.animSel = { keyframe: null, molang: null };
@@ -6168,10 +7583,29 @@ async function openProjectFromText(content, filePath, opts) {
   updateVisualSwitchButton();
 
   renderTimeline(); renderProps(); revalidate();
-  status('已打开工程：' + filePath + (legacyLoopClips
-    ? `　· 提示：该工程用过已移除的「循环播放」（${legacyLoopClips} 个片段），现已按「只播一次」处理，`
-      + '要重复播放请复制片段'
-    : ''), o.source || '');
+  // 状态栏拆成「可缩路径 + 不缩提示」两段 —— 长工程路径以前会把
+  // 超限原因整段顶进省略号后面的不可见区（QA 默认窗口截图只剩「已打开工程：C:\Users\…」）。
+  // 现在超限提示固定可见、做成真实按钮，点开是完整说明；提示文案里的
+  //「超过本版本可编辑上限 3600000ms，原值保留（保存照写）」一字不改。
+  const openPathText = '已打开工程：' + filePath;
+  const openHints = [];
+  if (legacyLoopClips) {
+    openHints.push({
+      text: `　· 提示：该工程用过已移除的「循环播放」（${legacyLoopClips} 个片段），现已按「只播一次」处理，`
+        + '要重复播放请复制片段',
+    });
+  }
+  if (openedTotalOverMax) {
+    // prefix 是「哪份工程、多长」这半句：窗口很窄时由 CSS 收起它，
+    // 保住后面那句真正的原因与承诺仍然完整可见（DOM 原文不变，读屏/悬停/弹窗都有全文）。
+    openHints.push({
+      prefix: `　· ⚠ 工程总长 ${openedTotalMs}ms `,
+      text: `超过本版本可编辑上限 ${MAX_TOTAL_MS}ms，原值保留（保存照写）`,
+      detail: totalOverLimitDetail(openedTotalMs, filePath),
+    });
+  }
+  if (openHints.length) statusSplitMessage(openPathText, openHints, o.source || '');
+  else status(openPathText, o.source || '');
 
   recordRecentProject(filePath, doc.name);            // 最近工程（异步，不拦界面）
   await restoreVisualFromDoc(doc, filePath);          // 工程里记着模型 → 重新画回画布
@@ -6180,16 +7614,16 @@ async function openProjectFromText(content, filePath, opts) {
 
 /**
  * 打开工程后恢复「视觉参考」。
- * 恢复模型 + 动画（卡 t_96cd9241）：两者都是外部路径引用，重开时读一次就能画 / 能摆姿态。
+ * 恢复模型 + 动画：两者都是外部路径引用，重开时读一次就能画 / 能摆姿态。
  * GIF 的 dataUrl 在回存时被刻意剔除（体积），且旧工程的 GIF 路径常常已经不在，
- * 贸然去读会引入新的失败路径 —— 那不在本卡范围内（既有 GIF 行为保持不变）。
+ * 贸然去读会引入新的失败路径 —— 那不在本次改动范围内（既有 GIF 行为保持不变）。
  */
 async function restoreVisualFromDoc(doc, filePath, opts) {
   const o = opts || {};
   const v = (doc && doc.visual) || {};
   const modelPath = v.modelPath || (v.kind === 'model' ? v.path : null);
   const mediaPath = v.mediaPath || ((v.kind !== 'model' && v.kind !== 'none') ? v.path : null);
-  // 视角（卡 t_c54d031b）：先把字段按规格 §4 校验好，画布再按它画。
+  // 视角：先把字段按规格 §4 校验好，画布再按它画。
   // 缺字段 → 默认视角（老工程打开后的观感与改动前逐像素一致）；坏值 → 回落默认值；
   // 全程只读，不往工程文件里写任何东西。
   const restoredView = viewFromVisual(v);
@@ -6201,7 +7635,7 @@ async function restoreVisualFromDoc(doc, filePath, opts) {
   if (mediaPath) await importGif(mediaPath, { noStep: true, restore: true });   // 恢复过程不把用户从当前页带走，也不改文档
 
   /**
-   * 恢复动画（卡 t_96cd9241，规格 §4）：
+   * 恢复动画（规格 §4）：
    *   记着 animFile → 把那份 .animation.json 读回来，并按 animName 选中那一条；
    *   只记着 animName（模型自带动画）→ 交给对齐逻辑按名字选中。
    * 全程 silent：不弹窗、不改时间轴总长、不标脏 —— 撤销/重做也不会因此多出撤销步。
@@ -6271,7 +7705,7 @@ function setDocName(name) {
   $('inpProjectName').value = v;
   if (STATE.doc.name !== v) {
     STATE.doc.name = v;
-    // 「改名」也要带上自己的 kind（卡 t_26c09aac 第一条）：
+    // 「改名」也要带上自己的 kind：
     // 不带参数会落到 commitUndo('op')，撤销时状态栏写「已撤销：操作」——
     // 用户在工程库里看到卡片改名，撤销提示却说得很含糊。
     markDirty('name');
@@ -6282,13 +7716,13 @@ function setDocName(name) {
 /**
  * 把当前工程存进工程库（工程总览里的按钮）；成功则把 SAVE_PATH 指过去。
  *
- * 同名工程**先问再写**（卡 t_5a1c18be 第一条）：默认工程名固定是「未命名时序」，
+ * 同名工程**先问再写**：默认工程名固定是「未命名时序」，
  * 「新建 → 保存到工程库」连着来两次必然撞名；以前是静默覆盖 ——
  * 先存的那份内容没了，而用户只看到事后一行状态栏文字，会以为两份都在。
  * 现在先让主进程查一次，有同名工程就让用户选「覆盖 / 另存为新名字 / 取消」，
  * 选「另存为」时连工程名一起改掉，保证卡片名 / 文件名 / 内容三处一致。
  *
- * 把当前工程的 SAVE_PATH 一起报给主进程（卡 t_26c09aac 第三条）：撞名的那个文件
+ * 把当前工程的 SAVE_PATH 一起报给主进程：撞名的那个文件
  * 就是「我正在编辑的这份」时，主进程会把默认键放在「更新这份」而不是「另存为」——
  * 否则用户每次改完再点保存，工程库里都会凭空多一张 X (2) 卡片，改动反而没进原来那份。
  */
@@ -6336,7 +7770,7 @@ async function saveProjectToLibrary() {
       mine ? '你原来那份保持不动，现在编辑的是新存的这一份' : '工程名也一起改了，卡片上不会和原来那份混起来');
   } else if (r.overwrote) {
     if (mine) {
-      // 撞名的就是自己正在编辑的这份（卡 t_26c09aac 第三条）：这不是「顶掉别人的工程」，
+      // 撞名的就是自己正在编辑的这份：这不是「顶掉别人的工程」，
       // 文案不能说成覆盖风险，否则用户每次存自己那份都要犹豫一下
       status('已更新你正在编辑的这份工程：' + r.path,
              '内容已换成最新版本（这一步撤销不了）');
@@ -6434,11 +7868,11 @@ function createNewProject() {
   // 界面上的设置值必须跟着新文档一起刷新：工程名 / BPM / 网格 / 吸附 / 总长。
   // 以前这里只手写回总长和名字，BPM 输入框留着上一个工程的值 —— 用户看到 55、
   // Ctrl+S 存到磁盘的却是 0（新建工程的默认值），导出的拍线 / 时间换算也跟着错。
-  // 复用「打开工程 / 撤销」共用的那一个函数，别再各写一份（卡 t_e4a641d4 D2）。
+  // 复用「打开工程 / 撤销」共用的那一个函数，别再各写一份（D2）。
   syncDocInputsFromDoc();
   STATE.totalTouched = false;   // 新工程：总长还没被用户改过（GIF 导入可以再自动给初值）
   markClean();
-  undoReset();                  // 撤销栈必须清空：旧工程的快照绝不能被撤进新工程（卡 t_6b99a1fd）
+  undoReset();                  // 撤销栈必须清空：旧工程的快照绝不能被撤进新工程
   $('metaBones').textContent = '骨骼：--';
   $('metaDuration').textContent = '总时长：--';
   renderTimeline(); renderProps(); revalidate();
@@ -6460,7 +7894,7 @@ function setupTopbar() {
   $('btnImportGif').addEventListener('click', async () => {
     // 按钮标题写的是「导入 GIF / 视频 / 图片」，对话框的过滤器就必须真的能选到视频。
     // 以前这里只写图像扩展名，Windows 下用户在弹出的框里根本看不到 .mp4，
-    // 「导入视频」这条路人只能靠手打路径 —— 本卡验收（导入 MP4 → 删除）会直接卡住。
+    // 「导入视频」这条路人只能靠手打路径 —— 验收（导入 MP4 → 删除）会直接卡住。
     const r = await window.mcs.pickFiles({
       title: '选择 GIF / 视频 / 图片',
       filters: [
@@ -6513,11 +7947,11 @@ function setupTopbar() {
   // 这几项（网格 / 吸附 / BPM / 总长 / 工程名）都会**写进 timeline.json**，
   // 所以只要值真的变了就必须标脏 —— 否则用户改完 BPM 直接关窗，主进程
   // before-quit 只看到 hasUnsavedChanges=false，不弹二次确认，改动静默丢失
-  // （mcs-qa 卡 t_e3735e8c 复现；本卡 t_1e297c55 修）。
+  // （实测；已修）。
   // 反向约束：值没变（点进框里又离开、原样提交、改一下又改回来）绝不能标脏，
   // 所以先比较再赋值，只有真的不同才调用 markDirty()。
   //
-  // 顺序铁律（卡 t_c4491bba 修）：**先改文档、再 markDirty(kind)**。
+  // 顺序铁律（修）：**先改文档、再 markDirty(kind)**。
   //   commitUndo() 比的是「改完的文档快照」与「上一次记下的快照」；写成「先标脏、
   //   后赋值」时两份快照一模一样 → 这一步根本不入撤销栈（Ctrl+Z 只会说
   //   「没有可撤销的操作」），而且 UNDO.lastJson 停在旧值，这次改动会悄悄并进
@@ -6546,7 +7980,7 @@ function setupTopbar() {
       const changed = cfg.gridMode !== 'ms' || cfg.gridMs !== ms;   // 先算再改：比较值必须在赋值前取好
       cfg.gridMode = 'ms';
       cfg.gridMs = ms;
-      if (changed) markDirty('grid');       // ← 卡 t_c4491bba：这一支原来是「先标脏、后赋值」，等于白按
+      if (changed) markDirty('grid');       // ← 这一支原来是「先标脏、后赋值」，等于白按
     }
     renderTimeline();
   });
@@ -6554,14 +7988,14 @@ function setupTopbar() {
     const v = !!e.target.checked;
     const changed = STATE.doc.config.snapToGrid !== v;   // 比较值必须在赋值前取好
     STATE.doc.config.snapToGrid = v;
-    if (changed) markDirty('snap');        // ← 卡 t_c4491bba：原来是「先标脏、后赋值」
+    if (changed) markDirty('snap');        // ← 原来是「先标脏、后赋值」
     renderTimeline();
   });
   $('inpBpm').addEventListener('change', (e) => {
     const v = Number(e.target.value) || 0;
     const changed = v !== STATE.doc.config.bpm;         // 比较值必须在赋值前取好
     STATE.doc.config.bpm = v;
-    if (changed) markDirty('bpm');         // ← 卡 t_c4491bba：原来是「先标脏、后赋值」
+    if (changed) markDirty('bpm');         // ← 原来是「先标脏、后赋值」
     renderTimeline();
     const bpm = STATE.doc.config.bpm;
     if (bpm > 0) {
@@ -6572,14 +8006,46 @@ function setupTopbar() {
     }
   });
   $('chkBeats').addEventListener('change', renderTimeline);
+  // 输入框的 max / title 与代码里的上限同一个来源：
+  // 不在 index.html 里写死第二份，免得哪天改了常量而 HTML 还留着旧数。
+  {
+    const inpTotal = $('inpTotalMs');
+    inpTotal.max = String(MAX_TOTAL_MS);
+    inpTotal.title = `时间轴总长，${MIN_TOTAL_MS}–${MAX_TOTAL_MS}ms（最长 ${MAX_TOTAL_MS / 1000}s）`;
+  }
   $('inpTotalMs').addEventListener('change', (e) => {
-    // 总长的唯一写入口：吸附网格 + 下限（最后一段音效的结束时间）+ 状态栏说法。
+    // 总长的唯一写入口：吸附网格 + 下限（最后一段音效的结束时间）+ 上限 + 状态栏说法。
     // 以前这里直接 `totalMs = max(200, value)`，于是能把总长缩到最后一段音效前面，
-    // 那一段就再也播不到（卡 t_6b99a1fd 修）。
-    const r = setTotalMs(e.target.value, { source: 'input' });
+    // 那一段就再也播不到（修）。
+    // 无上限的值（20 位以上）会让时间轴按它铺刻度把渲染进程卡死，
+    // 所以超上限的输入在这里被明确拒绝 —— 不写数据、不触发超宽重绘，并把框恢复成
+    // 当前生效值；框本身仍然可编辑，用户可以立刻重打算一个数，保存也不受影响。
+    const inp = e.target;
+    // 空框 / 非法文本都算「这次输入无效」：type=number 对 "NaN"、"-" 之类会回给空串，
+    // 以前空串被当作 Number('') = 0 走 clamp 分支，静默把总长改成 200ms。
+    const badText = inp.value;                          // 先留住用户打进来的原文（错误提示里要如实回显）
+    const shown = String(badText).trim() === '' ? '（空）' : badText;
+    const r = setTotalMs(inp.value, { source: 'input' });
+    if (r.rejected) {
+      const cur = totalMs();                            // 当前真正生效的值：恢复成它，配置一个字节都不动
+      inp.value = cur;                                  // 坏值不能留在框里（否则保存会写进工程）
+      inp.setAttribute('aria-invalid', 'true');         // 读屏也能听到「这次输入无效」
+      if (r.rejected === 'tooBig') {
+        status(`总长上限是 ${MAX_TOTAL_MS}ms（${MAX_TOTAL_MS / 1000}s），${shown} 超出了上限`,
+          `已恢复为当前 ${_floorS(cur)}s；再长的时序会让时间轴画不出来，所以这里不放行`);
+      } else {
+        status(`「${shown}」不是有效的总长数值`,
+          `已恢复为当前 ${_floorS(cur)}s；可以重新输入一个数`);
+      }
+      return;
+    }
+    inp.removeAttribute('aria-invalid');
     if (r.clamped) {
-      status(`总长不能短于 ${(r.floor / 1000).toFixed(3)}s（最后一段音效的结束时间）`,
-        `已停在 ${(r.value / 1000).toFixed(3)}s；想更短就先把它前面的音效挪走或缩短`);
+      status(floorClampTitle(r.floor), floorClampHint(r.value, r.floor));
+    } else if (r.overMax) {
+      // 只有「工程里本来就更长」这种非输入来源才可能走到这里：如实说明，不改数
+      status(`${fmtMs(r.value)} = ${(r.value / 1000).toFixed(3)}s（超出本版本可编辑上限 ${MAX_TOTAL_MS}ms）`,
+        '原值保留不动；编辑框里只能改成上限以内的数');
     } else {
       status(`${fmtMs(r.value)} = ${(r.value / 1000).toFixed(3)}s`,
         r.changed ? '总长已更新（播放 / 时间显示都按它走）' : '数值没变');
@@ -6604,9 +8070,15 @@ function setupTopbar() {
   // tabs
   document.querySelectorAll('.tab').forEach((t) => {
     t.addEventListener('click', () => {
-      document.querySelectorAll('.tab').forEach((x) => x.classList.remove('active'));
+      document.querySelectorAll('.tab').forEach((x) => {
+        x.classList.remove('active');
+        x.setAttribute('aria-selected', 'false');   // ORE 状态规范：选中态给读屏留 ARIA
+        x.tabIndex = -1;                            // roving：不在 Tab 顺序里的页签
+      });
       document.querySelectorAll('.tab-body').forEach((x) => x.classList.remove('active'));
       t.classList.add('active');
+      t.setAttribute('aria-selected', 'true');
+      t.tabIndex = 0;
       $('tab-' + t.dataset.tab).classList.add('active');
     });
   });
@@ -6698,7 +8170,7 @@ function setupGlobalDrop() {
 // 启动
 // ---------------------------------------------------------------------------
 function boot() {
-  // 模型/动画进预览画布：先把宿主回调交给 model-preview（卡 t_fa17801d）
+  // 模型/动画进预览画布：先把宿主回调交给 model-preview
   MCS_MODELPREVIEW.init({
     canvasEl: () => $('previewCanvas'),
     stageEl: () => $('previewStage'),
@@ -6706,7 +8178,7 @@ function boot() {
     readBinaryFile: (p) => window.mcs.readBinaryFile(p),
     audioPlaying: () => AudioEngine.isPlaying(),
     clockMs: () => visualClockMs(),
-    // 视角的唯一来源（卡 t_c54d031b）：model-preview 每次渲染都来问一次，
+    // 视角的唯一来源：model-preview 每次渲染都来问一次，
     // 两个页面共用这一份 —— 不会出现「调整页一个角度、音效页另一个角度」。
     view: () => rendererView(),
     setMetaText: (t) => {
@@ -6722,10 +8194,11 @@ function boot() {
   setupLaneContextMenu();
   setupTrackButtons();
   setupGlobalDrop();
-  setupPreviewResizer();
+  setupLayoutResizers();
   bindProps();
   updateWindowTitle();
   updateZoomFitHint();
+  setupZoomFitReflow();   // 窗口/视口宽度变了，「一屏约 Xs」跟着重算
 
   // 主进程在关窗确认里选「返回保存」时，会发 request-save 过来。
   // 直接触发保存（等同点「导出全部」），用户不用再找按钮。
@@ -6769,7 +8242,7 @@ function boot() {
 // 测试钩子（仅用于自动化验证，不影响正常使用）
 // ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
-// 本卡（t_fa17801d）的自动化观测钩子：
+// 自动化观测钩子（测试用）：
 //   __MCS_VISUAL__     预览画布现在显示什么（模式 / 模型统计 / 像素指纹 / 元信息）
 //   __MCS_OVERVIEW__   工程总览的状态（条目、卡片数、工程库目录）
 //   __MCS_LOAD_PROJECT__ / __MCS_SAVE_TO_LIBRARY__ / __MCS_OPEN_OVERVIEW__ / __MCS_VISUAL_SWITCH__
@@ -6813,7 +8286,7 @@ window.__MCS_LOAD_PROJECT__ = async (p) => {
   return openProjectFromText(fr.content, p, { source: '测试' });
 };
 window.__MCS_SAVE_TO_LIBRARY__ = () => saveProjectToLibrary();
-// 导出系统信息（卡 t_20c2e144）：真正点按钮那条路 = 走「另存为」对话框；
+// 导出系统信息：真正点按钮那条路 = 走「另存为」对话框；
 // 只想看文本内容时用 collect 那条（不弹框、不写盘）。
 window.__MCS_EXPORT_SYSINFO__ = () => exportSystemInfo();
 window.__MCS_SYSINFO_PAYLOAD__ = () => sysInfoPayload();
@@ -6830,6 +8303,17 @@ window.__MCS_SET_PLAYHEAD__ = (ms) => {
   syncVisualTo(STATE.playheadMs);
   return STATE.playheadMs;
 };
+
+// 的观测钩子：最近排过的音源（从源内哪一点开始、播多长、倍速）
+// + 当前拖动试听会话状态。QA 不必接扬声器也能核对"听到的是不是播放头那个位置"。
+window.__MCS_AUDIO_STATS__ = () => AudioEngine.debugStats();
+window.__MCS_TRANSPORT__ = () => ({
+  transport: STATE.transport,
+  scrubbing: STATE.scrubbing,
+  playheadMs: Math.round(STATE.playheadMs || 0),
+  playing: AudioEngine.isPlaying(),
+  btn: $('btnPlay') ? $('btnPlay').textContent : null,
+});
 
 window.__MCS_DEBUG__ = () => ({
   libTotal: STATE.library.length,
@@ -6860,12 +8344,12 @@ window.__MCS_ADD_EVENT__ = async (info, startMs, trackName) => {
     variantCount: info.variantCount || 1,
     startMs: startMs,
     durationMs: dur,
-    srcDurMs: dur,   // 源音频自然长度：非破坏性裁剪「最远能拖回哪儿」的边界（卡 t_47b9fab2）
+    srcDurMs: dur,   // 源音频自然长度：非破坏性裁剪「最远能拖回哪儿」的边界
     track: trackName || STATE.doc.tracks[0].name,
   });
   STATE.doc.clips.push(clip);
   setSelection([clip.id], clip.id);
-  markDirty('add');            // 卡 t_c4491bba：带 kind（测试钩子：加一个原版事件片段）
+  markDirty('add');            // 带 kind（测试钩子：加一个原版事件片段）
   renderTimeline();
   renderProps();
   revalidate();
@@ -6889,7 +8373,7 @@ window.__MCS_IMPORT_GIF__ = (p) => importGif(p);
 window.__MCS_STATE__ = () => STATE;
 
 // ---------------------------------------------------------------------------
-// 卡 t_c54d031b 的观测钩子：步骤页 / 视角 / 素材槽
+// 的观测钩子：步骤页 / 视角 / 素材槽
 //   __MCS_STEP__       当前在哪个步骤页、按钮选中态、右栏换了没有、画布用的角度
 //   __MCS_SLOTS__      两个素材槽的文案与按钮显隐（QA 直接读真实 DOM）
 //   __MCS_SET_STEP__   切页（等价于点步骤条上的按钮）
@@ -6942,7 +8426,7 @@ window.__MCS_SET_VIEW__ = (patch) => { const v = applyView(patch || {}); markDir
 window.__MCS_RESET_VIEW__ = () => resetView(false);
 
 // ---------------------------------------------------------------------------
-// 卡 t_96cd9241 的观测钩子：动画两档 / 列表 / 选中 / 播放方式 / 空状态
+// 的观测钩子：动画两档 / 列表 / 选中 / 播放方式 / 空状态
 //   __MCS_ANIM__        当前档、当前档列表（含表达式逐处说明）、选中项、画布实际在播的动画
 //   __MCS_ANIM_TIER__   换档（等价于点「关键帧动画」/「Molang 语言动画」）
 //   __MCS_ANIM_SELECT__ 选中一条（等价于点列表里那一行），key = `来源:名字`
@@ -7110,7 +8594,7 @@ DBG.tracks = () => STATE.doc.tracks.map((t) => ({
 }));
 DBG.showAudioHelp = () => openAudioHelpModal();
 
-// ---- 卡 t_6b99a1fd：总长 / 边界条 / 撤销栈的观测点（只读观测，不改行为）----
+// ---- 总长 / 边界条 / 撤销栈的观测点（只读观测，不改行为）----
 /** 总长相关的全部数字与几何：QA 用它核对「配置值 / 生效值 / 下限 / 抓手位置」是否同源 */
 DBG.total = () => {
   const rect = (el) => {
@@ -7127,6 +8611,8 @@ DBG.total = () => {
     floor: totalFloorMs(),                        // 下限 = 最后一段音效的结束时间
     clipsMaxEnd: clipsMaxEndMs(),
     minTotalMs: MIN_TOTAL_MS,
+    maxTotalMs: MAX_TOTAL_MS,                     // 输入框的硬上限（超上限的输入被明确拒绝）
+    overMax: cfg > MAX_TOTAL_MS,                  // 工程里的原值本身就是超上限（外部工程）—— 数据不改
     raisedByFloor: Math.round(totalMs()) > cfg,   // 生效值是不是被下限顶上去的
     gripExists: !!grip,
     gripRect: rect(grip),
@@ -7163,28 +8649,62 @@ DBG.setTotal = (ms) => setTotalMs(ms, { source: 'input' });
 //   showHelpFallback()      → 主进程开不出窗口时的兜底弹窗（「Help 不得为空」的底线）
 DBG.showHelp = () => showHelp();
 DBG.showHelpFallback = () => { openHelpModalFallback(); return $('modalBody').innerText.length; };
-// 「导出系统信息」（卡 t_20c2e144）：
+// 「导出系统信息」：
 //   sysInfoPayload() 看渲染进程会交给主进程哪些实测值（库规模 / 首次加载耗时）
 //   exportSysInfo()  走完整的「另存为」对话框那条路
 DBG.sysInfoPayload = () => sysInfoPayload();
 DBG.exportSysInfo = () => exportSystemInfo();
 
-// 卡 t_6b99a1fd 的启动初始化：总长边界条的拖拽管道 + 撤销栈基准。
-// 故意**不塞进 boot() 体内**：boot 是每张卡都会动的地方，并行开发时（本项目同工作区
+// 的启动初始化：总长边界条的拖拽管道 + 撤销栈基准。
+// 故意**不塞进 boot() 体内**：boot 是每次改动都可能碰到的地方，并行开发时（本项目同工作区
 // 同时跑 5 张卡）最容易被别人的整段覆盖吃掉 —— 本轮就被吃掉过一次，表现为
 // 「边界条画得出来、却怎么拖都不动」（没有任何 mousemove 管道）。挂在 DOMContentLoaded 上
 // 与 boot 平级，功能就不再依赖别人的改动。
 window.addEventListener('DOMContentLoaded', () => {
   setupTotalBoundary();       // 抓手 / 边界线的拖拽管道（window 级监听，重绘不丢）
   undoReset();                // 撤销栈的基准 = 启动时这份文档（否则「第一处改动」撤不回去）
-  // 卡 t_c54d031b：步骤条（① 模型/GIF 调整 ↔ ② 音效）与调整页的接线。
+  // 步骤条（① 模型/GIF 调整 ↔ ② 音效）与调整页的接线。
   // 同样挂在这里而不是 boot() 里 —— boot 是最容易被并行卡整段覆盖的地方。
   setupStepSwitch();
-  // 卡 t_96cd9241：调整页「动画」一栏（两档列表 + 播放方式）的接线，同样挂这里
+  // / ：三处 tablist 的 roving tabindex + 方向键导航
+  // （步骤条 / 右侧属性·校验·导出 / 调整页动画模式），同样挂这里。
+  setupRovingTablists();
+  // 调整页「动画」一栏（两档列表 + 播放方式）的接线，同样挂这里
   setupAnimPanel();
+  // 状态栏「点此查看怎么放音频」是真实按钮。
+  //   点击（鼠标，或 Enter / 空格的原生按钮激活）都把按钮本身作为「本次真实触发者」
+  //   交给弹窗，关闭后焦点才能回到这里；阻止冒泡是为了不让窗口级的
+  //   「空格 = 播放/暂停」「回车 = 试听选中片段」抢走按钮的原生激活键。
+  const audioHelpBtn = $('btnAudioHelp');
+  if (audioHelpBtn) {
+    audioHelpBtn.addEventListener('click', () => openAudioHelpModal(audioHelpBtn));
+    audioHelpBtn.addEventListener('keydown', (e) => {
+      // 回车显式打开：部分环境（含自动化发键）只发 keyDown/keyUp、不生成原生
+      // 回车激活所需的 char 事件，靠浏览器默认动作会「按了没反应」，所以这里自己开。
+      if (e.key === 'Enter' || e.code === 'Enter') {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!e.repeat) openAudioHelpModal(audioHelpBtn);
+        return;
+      }
+      // 空格按原生按钮语义激活（keyup 时浏览器自己点），只要别被窗口级「空格=播放」抢走。
+      if (e.code === 'Space' || e.key === ' ') e.stopPropagation();
+    });
+  }
+  // 老鼠标习惯的兼容：以前整条状态栏可点（div onclick）。现在入口是上面的真实按钮，
+  // 但「看见状态栏那句提示就顺手点一下」的用户不该失效 —— 点栏的其它位置同样打开帮助，
+  // 触发者仍记为那个按钮，关闭后焦点回到按钮上。只在这一状态真的生效（按钮可见）时接管。
+  const statusBarEl = $('statusBar');
+  if (statusBarEl) {
+    statusBarEl.addEventListener('click', (e) => {
+      if (!audioHelpBtn || audioHelpBtn.hidden) return;
+      if (e.target && e.target.closest && e.target.closest('button, input, a, select, textarea')) return;
+      openAudioHelpModal(audioHelpBtn);
+    });
+  }
 });
 /**
- * 片段几何快照（卡 t_47b9fab2）：条长 / 倍速 / 源内起止 / 淡入淡出 / 实际会响多久。
+ * 片段几何快照：条长 / 倍速 / 源内起止 / 淡入淡出 / 实际会响多久。
  * 一个对象看全 —— 开发自测与 QA 都用它核对，免得各自手算一套算错。
  */
 DBG.clipGeom = (id) => {

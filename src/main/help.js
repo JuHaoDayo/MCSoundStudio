@@ -1,5 +1,5 @@
 /**
- * Help：内置离线教程窗口 + 作者外链（卡 t_7ee2bf5b）
+ * Help：内置离线教程窗口 + 作者外链
  *
  * 「Help 不得为空」的落地方式：顶部「? Help」打开的是一份**真正的 HTML 文档** ——
  * src/renderer/help.html。它零外部资源（样式全内联），所以：
@@ -12,7 +12,7 @@
  * setWindowOpenHandler / will-navigate），否则 Electron 的默认行为是在自己内部再开一个窗口。
  *
  * 为什么是**独立文件 + 自注册**，而不是写进 src/main/main.js：
- *   卡 t_fa17801d（工程总览 / 工程导入）当时正在改 main.js，两块改动落在同一文件里会互相覆盖。
+ *   （工程总览 / 工程导入）当时正在改 main.js，两块改动落在同一文件里会互相覆盖。
  *   做成模块后 main.js 只需要末尾一行 `require('./help');`。
  */
 const { ipcMain, BrowserWindow, shell } = require('electron');

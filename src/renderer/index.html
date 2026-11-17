@@ -7,57 +7,63 @@
 </head>
 <body>
 
-<!-- ==================== 顶栏 ==================== -->
+<!-- ==================== 顶栏 ====================
+     ORE 实施：拆成两行，修 P2「窄窗按钮文字逐字换行/裁切」。
+     第一行 = 工程（返回/新建/打开/保存 + 工程名 + 导出全部），
+     第二行 = 素材与网格设置（三类导入 + 网格/吸附/BPM/拍线 + 总长）。
+     两行都按「组」换行，组内按钮 flex-shrink:0 + nowrap，任何宽度都不会把
+     一个按钮的中文压成竖排。工程名输入独占可伸缩空间。所有 id 与事件绑定不变。 -->
 <header id="topbar">
-  <div class="brand">MCSoundStudio<span class="ver">v0.1</span></div>
+  <div class="tb-row tb-row-main">
+    <div class="brand">MCSoundStudio<span class="ver">v0.2.0</span></div>
 
-  <div class="tb-group">
-    <button id="btnBackToProjects" title="回到工程列表">← 工程</button>
-    <button id="btnNew" title="新建时序">新建</button>
-    <button id="btnOpenTimeline" title="打开 timeline.json">打开</button>
-    <button id="btnSaveTimeline" title="保存 timeline.json">保存</button>
+    <div class="tb-group">
+      <button id="btnBackToProjects" title="回到工程列表">← 工程</button>
+      <button id="btnNew" title="新建时序">新建</button>
+      <button id="btnOpenTimeline" title="打开 timeline.json">打开</button>
+      <button id="btnSaveTimeline" title="保存 timeline.json">保存</button>
+    </div>
+
+    <!-- 工程名是工程本身的设置，不是导出时才填写的参数。放在常用工具栏，
+         新建后可立刻命名；导出页的同名输入框只是这里的同步入口。 -->
+    <div class="tb-group project-name-ctrl">
+      <label for="inpProjectName">工程名</label>
+      <input id="inpProjectName" type="text" value="未命名时序"
+             aria-label="工程名称" title="修改工程名称（会写入 timeline.json）">
+    </div>
+
+    <div class="tb-group tb-group-export">
+      <button id="btnExportAll" class="primary" title="导出全部（策划案 / 代码 / json）">导出全部 ▾</button>
+    </div>
   </div>
 
-  <!-- 工程名是工程本身的设置，不是导出时才填写的参数。放在常用工具栏，
-       新建后可立刻命名；导出页的同名输入框只是这里的同步入口。 -->
-  <div class="tb-group project-name-ctrl">
-    <label for="inpProjectName">工程名</label>
-    <input id="inpProjectName" type="text" value="未命名时序"
-           aria-label="工程名称" title="修改工程名称（会写入 timeline.json）">
-  </div>
+  <div class="tb-row tb-row-tools">
+    <div class="tb-group">
+      <button id="btnImportGif" title="导入 GIF / 视频 / 图片作为视觉参考">导入GIF/视频</button>
+      <button id="btnImportBB" title="导入 .bbmodel 模型">导入模型</button>
+      <button id="btnImportAnim" title="导入 .animation.json 动画">导入动画</button>
+    </div>
 
-  <div class="tb-group">
-    <button id="btnImportGif" title="导入 GIF / 视频 / 图片作为视觉参考">导入GIF/视频</button>
-    <button id="btnImportBB" title="导入 .bbmodel 模型">导入模型</button>
-    <button id="btnImportAnim" title="导入 .animation.json 动画">导入动画</button>
-  </div>
+    <div class="tb-group grid-ctrl">
+      <label>网格</label>
+      <select id="selGrid">
+        <option value="25">25ms</option>
+        <option value="50" selected>50ms (1tick)</option>
+        <option value="100">100ms</option>
+        <option value="250">250ms</option>
+        <option value="1000">1000ms</option>
+        <option value="beat">按拍（BPM）</option>
+      </select>
+      <label class="chk"><input type="checkbox" id="chkSnap" checked> 吸附</label>
+      <label>BPM</label>
+      <input type="number" id="inpBpm" value="0" min="0" max="400" step="1" class="num num-bpm">
+      <label class="chk"><input type="checkbox" id="chkBeats" checked> 拍线</label>
+    </div>
 
-  <div class="tb-group grid-ctrl">
-    <label>网格</label>
-    <select id="selGrid">
-      <option value="25">25ms</option>
-      <option value="50" selected>50ms (1tick)</option>
-      <option value="100">100ms</option>
-      <option value="250">250ms</option>
-      <option value="1000">1000ms</option>
-      <option value="beat">按拍（BPM）</option>
-    </select>
-    <label class="chk"><input type="checkbox" id="chkSnap" checked> 吸附</label>
-    <label>BPM</label>
-    <input type="number" id="inpBpm" value="0" min="0" max="400" step="1" style="width:56px">
-    <label class="chk"><input type="checkbox" id="chkBeats" checked> 拍线</label>
-  </div>
-
-  <div class="tb-group">
-    <label>总长(ms)</label>
-    <input type="number" id="inpTotalMs" value="5000" min="200" step="50" style="width:84px">
-  </div>
-
-  <div class="tb-spacer"></div>
-
-
-  <div class="tb-group">
-    <button id="btnExportAll" class="primary" title="导出全部（策划案 / 代码 / json）">导出全部 ▾</button>
+    <div class="tb-group total-ctrl">
+      <label for="inpTotalMs">总长(ms)</label>
+      <input type="number" id="inpTotalMs" value="5000" min="200" step="50" class="num num-total">
+    </div>
   </div>
 </header>
 
@@ -76,7 +82,7 @@
     </div>
     <div class="panel-search">
       <input id="inpSearch" type="text" placeholder="搜索音效名 / 路径…">
-      <!-- 清空按钮（卡 t_3623451f）：只在输入框有文字时出现；是原生 button，
+      <!-- 清空按钮：只在输入框有文字时出现；是原生 button，
            鼠标点 / Tab 选中后回车都能用，另外输入框里按 Esc 也清空 -->
       <button id="btnClearSearch" class="search-clear" type="button" hidden
               title="清空搜索（Esc）" aria-label="清空搜索">✕</button>
@@ -86,18 +92,27 @@
     </div>
   </aside>
 
+  <!-- 纵向分隔线：拖动改「音效库 / 中间工作区」占窗比例。
+       只改这一栏的宽度、相邻区跟着伸缩（中间是 flex:1），不是缩放波形/模型，也不改整窗大小。 -->
+  <div id="leftSplitter" class="panel-splitter" role="separator" aria-orientation="vertical"
+       aria-label="音效库与中间工作区的宽度分隔线" aria-valuemin="190" aria-valuenow="270"
+       tabindex="0" title="拖动调整音效库宽度；双击恢复默认 270px"></div>
+
   <!-- 中：时间轴 -->
   <section id="centerPanel">
 
-    <!-- 步骤条（卡 t_c54d031b）：① 模型/GIF 调整 ↔ ② 音效。
+    <!-- 步骤条：① 模型/GIF 调整 ↔ ② 音效。
          两个按钮都摆在第一屏、当前页有明显选中态 —— 以前预览区里一个入口都没有，
          用户根本找不到「在哪摆模型角度」。切页只换右边的控件，画布还是同一块。 -->
     <div id="stepBar" class="step-bar" role="tablist" aria-label="工作步骤">
-      <button id="btnStepAdjust" class="step-btn" role="tab" aria-selected="false"
+      <button id="btnStepAdjust" class="step-btn" role="tab" aria-selected="false" tabindex="-1"
               title="摆模型角度、选动画、导入 GIF/视频/图片">① 模型/GIF 调整</button>
-      <button id="btnStepSound" class="step-btn active" role="tab" aria-selected="true"
+      <button id="btnStepSound" class="step-btn active" role="tab" aria-selected="true" tabindex="0"
               title="时间轴 + 音效库 + 片段属性">② 音效</button>
-      <span class="step-hint" id="stepHint">摆好模型角度 / 放好 GIF，再回「② 音效」配音效</span>
+      <!-- 1086 宽实测这句要 266px、只剩 203px，尾部被省略号截掉且没有全文出口；
+           补 title，悬停读全文，视觉与布局不变。 -->
+      <span class="step-hint" id="stepHint"
+            title="摆好模型角度 / 放好 GIF，再回「② 音效」配音效">摆好模型角度 / 放好 GIF，再回「② 音效」配音效</span>
     </div>
 
     <!-- 预览区（视觉参考） -->
@@ -116,37 +131,46 @@
         <span id="metaVisual">视觉：无</span>
         <!-- 播放头越过 GIF 末尾时才出现：画面这时不再变化，只靠右边那行小字用户容易以为卡死 -->
         <span id="metaTailBadge" class="meta-tail-badge" style="display:none">⏹ 画面已定格在 GIF 末帧</span>
-        <!-- 同时有模型和 GIF/视频时才出现：切「看模型 / 看 GIF」，两边都不丢（卡 t_fa17801d） -->
+        <!-- 同时有模型和 GIF/视频时才出现：切「看模型 / 看 GIF」，两边都不丢 -->
         <button id="btnVisualSwitch" class="mini" style="display:none"
                 title="在模型预览和 GIF/视频预览之间切换">看模型</button>
         <button id="btnRemoveMedia" class="mini preview-remove" style="display:none"
                 title="移除 GIF、视频或图片；不会影响已导入的模型">移除画面</button>
         <button id="btnRemoveModel" class="mini preview-remove" style="display:none"
                 title="移除 Blockbench 模型；不会影响已导入的 GIF、视频或图片">移除模型</button>
-        <!-- 音效页里回调整页的近路（卡 t_c54d031b）：等价于点上面的「① 模型/GIF 调整」 -->
+        <!-- 音效页里回调整页的近路：等价于点上面的「① 模型/GIF 调整」 -->
         <button id="btnGoAdjust" class="mini" style="display:none"
                 title="回到「① 模型/GIF 调整」摆模型角度、换素材">去调整页</button>
         <span id="metaDuration">总时长：--</span>
         <span id="metaBones">骨骼：--</span>
       </div>
-      <div id="previewResizer" title="拖动调整预览区高度"></div>
+      <!-- 横向分隔线：拖动改「预览区 / 时间轴」占窗比例。
+           预留在预览区底部、整条可抓；双击恢复默认 260px。 -->
+      <div id="previewResizer" role="separator" aria-orientation="horizontal"
+           aria-label="预览区与时间轴的横向分隔线" aria-valuemin="120"
+           tabindex="0" title="拖动调整预览区高度；双击恢复默认 260px"></div>
     </div>
 
-    <!-- 传输控制 -->
+    <!-- 传输控制（中栏窄到 420px 时必须换行而不是被右栏盖住）
+         控件按「不可拆的小组」包起来：播放/停止/时间一组，主音量一组，缩放一组，
+         换行只会发生在组与组之间，不会把「主音量」和它的滑杆拆到两行。 -->
     <div id="transport">
-      <button id="btnPlay" class="tp-btn" title="播放 / 暂停 (Space)">▶</button>
-      <button id="btnStop" class="tp-btn" title="停止">■</button>
-      <span id="timeDisplay" class="time-display">0ms / 0ms</span>
-      <span class="tp-sep"></span>
-      <label class="tp-label">主音量</label>
-      <input type="range" id="rngMaster" min="0" max="1" step="0.01" value="1" style="width:90px">
-      <span id="masterVal" class="tp-val">100%</span>
-      <span class="tp-spacer"></span>
-      <label class="tp-label">缩放</label>
-      <input type="range" id="rngZoom" min="0.05" max="2" step="0.01" value="0.25" style="width:110px">
-      <span id="zoomVal" class="tp-val">0.25 px/ms</span>
+      <span class="tp-group">
+        <button id="btnPlay" class="tp-btn" title="播放 / 暂停 (Space)">▶</button>
+        <button id="btnStop" class="tp-btn" title="停止">■</button>
+        <span id="timeDisplay" class="time-display">0ms / 0ms</span>
+      </span>
+      <span class="tp-group">
+        <label class="tp-label">主音量</label>
+        <input type="range" id="rngMaster" min="0" max="1" step="0.01" value="1" title="主音量">
+        <span id="masterVal" class="tp-val">100%</span>
+      </span>
+      <span class="tp-group tp-group-zoom">
+        <label class="tp-label">缩放</label>
+        <input type="range" id="rngZoom" min="0.005" max="4" step="any" value="0.25" title="时间轴缩放（px/ms；最小 0.005 = 一屏能看最长的时长）">
+        <span id="zoomVal" class="tp-val">0.25 px/ms</span>
+      </span>
       <button id="btnZoomFit" class="tp-btn wide" title="缩放到整段铺满窗口 (F)">适合窗口</button>
-      <span class="tp-spacer"></span>
     </div>
 
     <!-- 时间轴 -->
@@ -164,20 +188,47 @@
         <div id="selBox"></div>
         <div id="playhead"></div>
       </div>
+      <!-- 总长 HUD（/ P2-B）：贴在标尺「视口」右侧、内缩 8px，
+           随滚动/缩放始终留在可视区内，不再跟着 #totalGrip 一起滚出右边界被裁切。
+           位置是视口坐标（不随横向滚动移动），底色不透明，遮住其后的刻度；
+           真实终点仍由 #totalGrip（标尺）与 #totalEdge（轨道区）按真实坐标画出，
+           终点滚出可视区时这里显示「→」并注明终点在右侧，绝不把可见刻度当终点。 -->
+      <div id="rulerHud" class="ruler-hud" title="时间轴总长（拖动标尺上的黄色把手可改总长）">
+        <span id="rulerHudArrow" class="ruler-hud-arrow" hidden>→</span>
+        <span id="rulerHudText">总长 5.00s</span>
+      </div>
     </div>
 
     <div id="statusBar">
       <span id="statusMsg">就绪</span>
-      <span id="statusRight"></span>
+      <span class="status-right">
+        <span id="statusRight"></span>
+        <!-- 音频缺失 / 试听失败时的帮助入口：必须是真实按钮。
+             以前整条 #statusBar 是个 onclick 的 div —— 鼠标能点、Tab 到不了，
+             弹窗关闭时也记录不到触发者，焦点直接掉回 BODY。现在入口可聚焦、
+             Enter / 空格激活，关闭弹窗后焦点回到这里。 -->
+        <button id="btnAudioHelp" class="status-btn status-help" type="button" hidden
+                aria-haspopup="dialog" aria-controls="modal"
+                title="试听没有声音？点这里看音频该放在哪、怎么修">点此查看怎么放音频</button>
+        <!-- 一键恢复默认布局：放状态栏右侧，任何页面/任何分栏宽度都点得到；
+             顶栏在最小窗口宽度下已经排满，再塞按钮会挤掉「导出全部」。 -->
+        <button id="btnResetLayout" class="status-btn"
+                title="一键恢复默认布局：预览区高度 260px、音效库 270px、属性栏 320px">恢复默认布局</button>
+      </span>
     </div>
   </section>
 
+  <!-- 纵向分隔线：拖动改「中间工作区 / 属性栏」占窗比例，相邻区同步伸缩 -->
+  <div id="rightSplitter" class="panel-splitter" role="separator" aria-orientation="vertical"
+       aria-label="中间工作区与属性栏的宽度分隔线" aria-valuemin="220" aria-valuenow="320"
+       tabindex="0" title="拖动调整右侧属性栏宽度；双击恢复默认 320px"></div>
+
   <!-- 右：属性 / 校验 / 导出 -->
   <aside id="rightPanel">
-    <div class="tabs">
-      <button class="tab active" data-tab="props">属性</button>
-      <button class="tab" data-tab="issues">校验 <span id="issueBadge" class="badge">0</span></button>
-      <button class="tab" data-tab="export">导出</button>
+    <div class="tabs" role="tablist" aria-label="右侧面板">
+      <button class="tab active" data-tab="props" role="tab" aria-selected="true" tabindex="0">属性</button>
+      <button class="tab" data-tab="issues" role="tab" aria-selected="false" tabindex="-1">校验 <span id="issueBadge" class="badge">0</span></button>
+      <button class="tab" data-tab="export" role="tab" aria-selected="false" tabindex="-1">导出</button>
     </div>
 
     <!-- 属性页 -->
@@ -211,7 +262,7 @@
             <input id="pDuration" type="number" step="10">
           </div>
         </div>
-        <!-- 非破坏性裁剪：源内起止（卡 t_47b9fab2）。改这两个值不会销毁素材，
+        <!-- 非破坏性裁剪：源内起止。改这两个值不会销毁素材，
              把「裁剪终点」拉回源音频结尾就恢复完整音效。 -->
         <div class="field-row">
           <div class="field">
@@ -263,7 +314,7 @@
           <label>音高精确值 <small>(0-256，超出 0.5~2 会明显变声)</small></label>
           <input id="pPitchNum" type="number" step="0.01" min="0" max="256">
         </div>
-        <!-- 「循环播放 / 循环区间终点」已在卡 t_6b5016ec 里整体移除：
+        <!-- 「循环播放 / 循环区间终点」已在里整体移除：
              需要重复播放就复制片段（右键「再复制一份」或 Ctrl+D），
              面板上不再保留这两个控件。 -->
         <div class="field-row">
@@ -328,7 +379,7 @@
         <input id="eCustomFolder" type="text" value="custom">
       </div>
       <div class="export-list">
-        <button class="exp-btn" data-exp="preview">📄 预览导出内容</button>
+        <button id="btnExportPreview" class="exp-btn" data-exp="preview">📄 预览导出内容</button>
         <button class="exp-btn" data-exp="markdown">📝 策划案 Markdown (.md)</button>
         <button class="exp-btn" data-exp="python">🐍 ModSDK Python (.py)</button>
         <button class="exp-btn" data-exp="sounddef">📦 sound_definitions.json</button>
@@ -338,12 +389,12 @@
       <div class="field-hint">「导出全部」会一次性写入这 5 个文件到同一目录。</div>
     </div>
 
-    <!-- ==================== ① 模型/GIF 调整页的面板（卡 t_c54d031b） ====================
+    <!-- ==================== ① 模型/GIF 调整页的面板 ====================
          调整页没有片段可编辑，所以它**替换**音效页的标签页（属性 / 校验 / 导出）：
          上半「素材槽」、中间「角度」、下半「动画」。
          角度读数与画布共用同一份状态（STATE.doc.visual），所以切回音效页看到的角度
          就是这里调好的那个 —— 不存在「两个页面各记一份角度」。
-         「动画」那一格由后续卡（t_96cd9241）接两档列表，这里先如实说明现状。 -->
+         「动画」那一格由后续卡接两档列表，这里先如实说明现状。 -->
     <div id="adjustPanel" class="adjust-panel">
       <div class="adj-sec">
         <div class="adj-title">素材槽</div>
@@ -406,14 +457,14 @@
 
       <div class="adj-sec">
         <div class="adj-title">动画</div>
-        <!-- 动画两档（卡 t_96cd9241）：按「这条动画里有没有表达式」分堆。
+        <!-- 动画两档：按「这条动画里有没有表达式」分堆。
              关键帧动画档 = 全部关键帧都是数值（画布上能完整播）；
              Molang 语言动画档 = 含表达式的动画 —— **本期不求值**，画布上按「保持前一帧」播，
              列表里逐处标注哪一处不会动、按什么处理。不假装支持，也不静默丢帧。 -->
         <div class="anim-modes" id="animModeBar" role="tablist" aria-label="动画模式">
-          <button id="btnAnimModeKey" class="seg-btn active" role="tab" aria-selected="true"
+          <button id="btnAnimModeKey" class="seg-btn active" role="tab" aria-selected="true" tabindex="0"
                   title="这条动画里全部关键帧都是数值，画布上能完整播出来">关键帧动画</button>
-          <button id="btnAnimModeMolang" class="seg-btn" role="tab" aria-selected="false"
+          <button id="btnAnimModeMolang" class="seg-btn" role="tab" aria-selected="false" tabindex="-1"
                   title="含表达式的动画：本期不求值，画布上按「保持前一帧」播，列表里逐处标注">Molang 语言动画</button>
         </div>
         <div class="field-hint tight" id="animModeHint">关键帧动画：这条动画里全部关键帧都是数值，画布上能完整播出来。</div>
@@ -447,7 +498,7 @@
 <div id="overview" class="ov-backdrop" style="display:none">
   <div class="ov-panel">
     <div class="ov-head">
-      <span class="ov-title">MCSoundStudio <span class="ver">v0.1</span></span>
+      <span class="ov-title">MCSoundStudio <span class="ver">v0.2.0</span></span>
     </div>
     <section class="start-actions" aria-label="开始">
       <div>
@@ -468,7 +519,7 @@
     </div>
     <div id="ovHint" class="ov-hint"></div>
     <!-- 工程库里读不了的文件（JSON 坏了 / 不是工程）：只报数字用户不知道该修哪个，
-         所以直接把文件名和原因列出来（卡 t_5a1c18be 第二条）。默认展开，可以收起。 -->
+         所以直接把文件名和原因列出来。默认展开，可以收起。 -->
     <details id="ovSkipped" class="ov-skip" style="display:none">
       <summary id="ovSkippedSummary"></summary>
       <ul id="ovSkippedList"></ul>
@@ -490,7 +541,7 @@
       </div>
       <button id="ovBtnAuthor">作者 · B 站主页</button>
     </section>
-    <!-- 系统信息（卡 t_20c2e144）：把「这台机器到底什么配置」写成一个 txt，
+    <!-- 系统信息：把「这台机器到底什么配置」写成一个 txt，
          发给作者排查兼容性/性能问题用。数字全是导出那一刻现场读出来的。 -->
     <section class="start-link-section">
       <div>
@@ -504,7 +555,7 @@
 
 <!-- ==================== 导出预览 / 报告 弹窗 ==================== -->
 <div id="modal" class="modal-backdrop" style="display:none">
-  <div class="modal">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
     <div class="modal-head">
       <span id="modalTitle">预览</span>
       <div>
@@ -517,27 +568,32 @@
   </div>
 </div>
 
-<!-- 时间轴右键菜单（内容由 app.js 的 setupLaneContextMenu 动态生成） -->
-<div id="clipMenu"></div>
+<!-- 时间轴右键菜单（内容由 app.js 的 setupLaneContextMenu 动态生成）。
+     容器给 role=menu，容器里由 renderMenu 生成的按钮才是 role=menuitem。 -->
+<div id="clipMenu" role="menu" aria-label="时间轴操作菜单"></div>
 
 <!-- 拖拽提示层 -->
 <div id="dropOverlay" class="drop-overlay" style="display:none">
   <div class="do-box">松开以导入</div>
 </div>
 
+<!-- 拖动分隔线时的尺寸提示：鼠标旁显示「预览区 320px / 音效库 300px」，
+     松手即消失。只做反馈，不接收鼠标事件。 -->
+<div id="layoutTip" class="layout-tip" style="display:none"></div>
+
 <script src="timeline.js"></script>
 <script src="wiki-names.js"></script>
 <script src="parsers.js"></script>
 <script src="event-audio.js"></script>
-<!-- 音效库子类分组规则（卡 t_3623451f）：物品使用族 / 玩法域，纯数据 + 纯函数 -->
+<!-- 音效库子类分组规则：物品使用族 / 玩法域，纯数据 + 纯函数 -->
 <script src="library-groups.js"></script>
 <script src="audio.js"></script>
 <script src="waveform.js"></script>
 <script src="gif.js"></script>
-<!-- 模型/动画进预览画布（卡 t_fa17801d）：纯数学 + 绘制，最后接线 -->
+<!-- 模型/动画进预览画布：纯数学 + 绘制，最后接线 -->
 <script src="model-view.js"></script>
 <script src="model-preview.js"></script>
-<!-- 工程总览浮层（卡 t_fa17801d） -->
+<!-- 工程总览浮层 -->
 <script src="overview.js"></script>
 <script src="app.js"></script>
 </body>

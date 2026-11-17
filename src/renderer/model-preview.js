@@ -1,5 +1,5 @@
 /**
- * model-preview.js — 「模型/动画显示在预览画布上」的接线层（卡 t_fa17801d）
+ * model-preview.js — 「模型/动画显示在预览画布上」的接线层
  *
  * 数学与绘制在 model-view.js（纯函数 + canvas），本文件负责：
  *   1. 把导入的 .bbmodel 文本变成场景，并把贴图读进来（相对路径按模型目录解析）
@@ -28,7 +28,7 @@ const S = {
   tracks: null,           // 当前动画的可采样轨道（parsers.extractAnimationTracks 的一条）
   animName: null,
   anims: [],              // 文件里全部动画（名字/时长）
-  // 动画目录（卡 t_96cd9241）：两档列表与画布读的是**同一份**「能播的动画」清单，
+  // 动画目录：两档列表与画布读的是**同一份**「能播的动画」清单，
   // 来源两类 —— 导入的 .animation.json（source='file'）与模型 .bbmodel 自带动画
   // （source='model'）。每条都带 bones（可采样轨道）、expressions（未求值的表达式清单）
   // 与 stats（关键帧数 / 表达式的处数）。列表按名字选中，画布就播那一条。
@@ -95,9 +95,9 @@ function render(ms, opts) {
   canvas.style.width = box.width + 'px';
   canvas.style.height = box.height + 'px';
 
-  // 视角（卡 t_c54d031b）：角度 / 缩放 / 位移只有一份真相（STATE.doc.visual），
+  // 视角：角度 / 缩放 / 位移只有一份真相（STATE.doc.visual），
   // 由 app.js 校验后经 host.view() 递进来。调整页与音效页都读它 —— 两个页面各存一份
-  // 必然对不上，那正是本卡要消灭的现象。opts 里的同名字段只给自动化测试做临时覆盖。
+  // 必然对不上，那正是这里要消灭的现象。opts 里的同名字段只给自动化测试做临时覆盖。
   const v = resolveView(o);
   const pose = S.tracks ? P().sampleAnimationPose(S.tracks, at) : null;
   const proj = MV().renderToCanvas(canvas, S.scene, pose, {
@@ -184,7 +184,7 @@ function snapshot() {
 }
 
 // ---------------------------------------------------------------------------
-// 动画目录（卡 t_96cd9241）
+// 动画目录
 //
 // 为什么要有目录这一层：以前 loadAnimationText() 只把「最长的那条」塞进 S.tracks，
 // 模型自带动画更是连轨道都没有 —— 于是界面上想列两条都无从列起。现在所有来源都
@@ -257,7 +257,7 @@ function select(entry) {
   S.selectedKey = entryKey(entry);
   // S.tracks 存**整条目录项**（含 bones / lengthMs / expressions / stats），不是它的 bones 映射：
   // 采样 sampleAnimationPose(S.tracks) 要 .bones，元信息与快照要 .lengthMs / .bones
-  //（卡 t_96cd9241 拆分目录层时这里曾错写成 entry.bones，界面一选中就抛
+  //（拆分目录层时这里曾错写成 entry.bones，界面一选中就抛
   //  「Cannot convert undefined or null to object」—— 自验探针逮到的）
   S.tracks = entry;
   S.animName = entry.name;
@@ -307,7 +307,7 @@ async function loadModelText(text, filePath) {
   S.textureReport = { total: scene.textureRefs.length, loaded: 0, missing: [] };
   S.lastStats = null;
 
-  // 模型自带的 animations 也登记进动画目录（卡 t_96cd9241）：以前只在弹窗里报一句
+  // 模型自带的 animations 也登记进动画目录：以前只在弹窗里报一句
   // 「模型内动画（N 条）：…」，画布上根本选不了 —— 现在两档列表里直接能选来播。
   setCatalogSource('model', P().extractBBModelAnimationTracks(text).animations, filePath);
 
@@ -400,7 +400,7 @@ function loadAnimationText(text, filePath) {
     if (tr) {
       const chans = Object.keys(tr.bones).map((bn) => `${bn}[${Object.keys(tr.bones[bn]).join('/')}]`);
       report.push(`   可采样通道：${chans.join(' ') || '(无)'}`);
-      // 表达式帧不静默丢（卡 t_96cd9241）：弹窗里也逐处说清「这一处不会动、按什么处理」
+      // 表达式帧不静默丢：弹窗里也逐处说清「这一处不会动、按什么处理」
       if (tr.expressions.length) {
         report.push(`   ⚠ 含 ${tr.stats.exprCount} 处表达式（本期不求值，按前一帧保持），逐处列出：`);
         for (const e of tr.expressions) report.push(`     · ${P().expressionNote(e)}`);
@@ -484,7 +484,7 @@ const api = {
   startDriver,
   stopDriver,
   stageBox,
-  // 动画目录（卡 t_96cd9241）：登记 / 选中 / 查询
+  // 动画目录：登记 / 选中 / 查询
   setCatalogSource,
   catalogRow,
   select,

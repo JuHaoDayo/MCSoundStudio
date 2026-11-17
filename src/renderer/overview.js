@@ -1,5 +1,5 @@
 /**
- * overview.js — 「工程总览」浮层（卡 t_fa17801d）
+ * overview.js — 「工程总览」浮层
  *
  * 目标（像剪辑软件的工程浏览器/开始页）：
  *   · 列出已保存的工程（工程库目录 + 最近打开过的），卡片上能一眼看清
@@ -164,7 +164,7 @@ function cardHtml(e, idx) {
 }
 
 // ---------------------------------------------------------------------------
-// 工程库里读不了的文件（卡 t_5a1c18be 第二条）
+// 工程库里读不了的文件
 // ---------------------------------------------------------------------------
 // 背景：以前提示只写「N 个文件不是工程，已跳过」——用户看到数字却不知道是哪个文件、
 // 也无从处理，只能自己去翻工程库目录。主进程 list-projects 早就把
@@ -222,7 +222,7 @@ function render() {
   // 还没建过（第一次保存到工程库时会自动建）。所以这种情况必须走「工程库还是空的」那条文案 ——
   // 以前这里只判 dirExists（missing-dir 也是 false），于是首屏出现两处自相矛盾的话：
   // 中间大字说「读不到 / 访问不了」，同一屏的小字却说「还没有创建，会自动建」，
-  // 用户第一眼就被通知「有东西坏了」（卡 t_e4a641d4 D1）。
+  // 用户第一眼就被通知「有东西坏了」（D1）。
   // 只有目录真的存在却读不出来（reason=unreadable-dir，或主进程没给出原因的读失败）
   // 才是故障，才说「读不到 / 访问不了」并让用户点「刷新」重试。
   const dirMissing = current.scanReason === 'missing-dir';
@@ -303,7 +303,7 @@ async function open(api) {
  * 关掉起始页浮层，回到编辑器视图。
  *
  * 以前这里多写了一行 `setWorkspaceVisible(true);`——全仓库没有这个函数，于是
- * close() 每次都抛 ReferenceError（卡 t_244c13a2）。它抛在「隐藏浮层」之后，
+ * close() 每次都抛 ReferenceError。它抛在「隐藏浮层」之后，
  * 所以画面看不出问题，坏掉的是自动化钩子 window.__MCS_CLOSE_OVERVIEW__
  * （executeJavaScript 会因为渲染进程抛错直接 reject）。
  *
@@ -357,7 +357,7 @@ function dump() {
     })),
     cardCount: cards.length,
     skipped: (current && current.skipped) || [],
-    // 坏文件点名（卡 t_5a1c18be 第二条）：文件名 + 原因，验收脚本不用去解析提示文本
+    // 坏文件点名：文件名 + 原因，验收脚本不用去解析提示文本
     skippedFiles: ((current && current.skipped) || []).map((s) => s.file),
     skippedDetail: ((current && current.skipped) || []).map((s) => ({ file: s.file, error: s.error || '' })),
   };
@@ -390,7 +390,7 @@ function bind() {
   });
   $('ovBtnHelp').addEventListener('click', () => { if (API) API.openHelp(); });
   $('ovBtnAuthor').addEventListener('click', () => { if (API) API.openAuthor(); });
-  // 导出系统信息（卡 t_20c2e144）：真正干活的是 app.js 的 exportSystemInfo()，
+  // 导出系统信息：真正干活的是 app.js 的 exportSystemInfo()，
   // 这里只负责接线（库规模与首次加载耗时只有渲染进程知道，由它一起打包给主进程）。
   $('ovBtnSysInfo').addEventListener('click', () => { if (API) API.exportSystemInfo(); });
 
